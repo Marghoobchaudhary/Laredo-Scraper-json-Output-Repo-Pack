@@ -14,7 +14,7 @@ on:
       wait_seconds:
         description: "UI wait seconds"
         type: number
-        default: 30
+        default: 40
       max_parties:
         description: "How many Party columns (Party1..N)"
         type: number
@@ -28,7 +28,15 @@ on:
         type: number
         default: 2
       start_url:
-        description: "Direct URL to results table page (recommended)"
+        description: "Direct URL to results table page (RECOMMENDED)"
+        type: string
+        default: ""
+      iframe_css:
+        description: "CSS selector for iframe containing the table (leave blank if none)"
+        type: string
+        default: ""
+      table_css:
+        description: "CSS selector for the results table (leave blank for auto)"
         type: string
         default: ""
       push_results:
@@ -46,8 +54,7 @@ jobs:
     env:
       LAREDO_USERNAME: ${{ secrets.LAREDO_USERNAME }}
       LAREDO_PASSWORD: ${{ secrets.LAREDO_PASSWORD }}
-      # If you want, you can store a default in a secret and fall back to it:
-      LAREDO_URL: ${{ secrets.LAREDO_URL }}
+      LAREDO_URL: ${{ secrets.LAREDO_URL }} # optional fallback for start_url
       OUT_DIR: ${{ inputs.out_dir || 'files' }}
 
     steps:
@@ -92,38 +99,29 @@ jobs:
             --max-parties ${{ inputs.max_parties }} \
             --days-back ${{ inputs.days_back }} \
             --rescrape-indices "${{ inputs.rescrape_indices }}" \
-            --start-url "${{ inputs.start_url || env.LAREDO_URL }}"
+            --start-url "${{ inputs.start_url || env.LAREDO_URL }}" \
+            ${{ inputs.iframe_css != '' && format('--iframe-css "{0}"', inputs.iframe_css) || '' }} \
+            ${{ inputs.table_css != '' && format('--table-css "{0}"', inputs.table_css) || '' }}
 
       - name: List outputs for debugging
         if: always()
         run: |
           echo "=== GIT STATUS ==="
           git status
-          echo "=== TREE (repo root) ==="
+          echo "=== ROOT TREE ==="
           ls -la
-          echo "=== OUT_DIR LISTING ==="
+          echo "=== OUT_DIR TREE ==="
           ls -la "${{ env.OUT_DIR }}" || true
-          echo "=== LOG PREVIEW ==="
+          echo "=== LOG PREVIEW (laredo.logs) ==="
           tail -n 200 laredo.logs || true
-          echo "=== Flow log preview ==="
+          echo "=== FLOW PREVIEW (laredo-flow-logs.json) ==="
           tail -n 200 laredo-flow-logs.json || true
-          echo "=== If present, saved HTML title ==="
-          python - <<'PY'
-import os, re
-p="laredo_page.html"
-if os.path.exists(p):
-    import bs4
-    from bs4 import BeautifulSoup
-    with open(p, "r", encoding="utf-8", errors="ignore") as f:
-        s=BeautifulSoup(f, "html.parser")
-        print("HTML <title>:", (s.title.string if s.title else "").strip())
-else:
-    print("No laredo_page.html saved")
-PY
-          echo "=== If present, screenshot file size ==="
-          [ -f laredo_page.png ] && ls -la laredo_page.png || echo "No laredo_page.png saved"
+          echo "=== HTML present? ==="
+          [ -f laredo_page.html ] && wc -c laredo_page.html || echo "no laredo_page.html"
+          echo "=== Screenshot present? ==="
+          [ -f laredo_page.png ] && ls -la laredo_page.png || echo "no laredo_page.png"
 
-      - name: Upload JSON, logs, HTML and screenshot as artifact
+      - name: Upload artifacts (JSON, CSV, logs, HTML, screenshot)
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -140,13 +138,10 @@ PY
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          # Force-add even if patterns are in .gitignore
           git add -f "${{ env.OUT_DIR }}/.gitkeep" 2>/dev/null || true
           git add -f "${{ env.OUT_DIR }}"/*.json 2>/dev/null || true
           git add -f "${{ env.OUT_DIR }}"/*.csv 2>/dev/null || true
           git add -f laredo-flow-logs.json laredo.logs 2>/dev/null || true
           git add -f laredo_page.html laredo_page.png 2>/dev/null || true
-
           git commit -m "chore: update Laredo outputs $(date -u +'%Y-%m-%dT%H:%M:%SZ')" || echo "No changes to commit"
           git push || true
