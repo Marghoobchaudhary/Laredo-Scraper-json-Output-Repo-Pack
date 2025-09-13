@@ -21,6 +21,7 @@ class LaredoScraper:
     """
     Scrapes laredoanywhere.com, intercepts search API results,
     enriches with doc details, and writes per-county JSON files.
+    Adds fallback: read Doc Date & Recorded Date from the visible table.
     """
 
     def __init__(self, out_dir="files", headless=True, wait_seconds=30, max_parties=6, days_back=2):
@@ -44,7 +45,7 @@ class LaredoScraper:
         chrome_options.add_argument("--disable-gpu")
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
-        chrome_options.add_argument("--window-size=1600,1000")
+        chrome_options.add_argument("--window-size=1600,1200")
         chrome_options.add_argument("--disable-blink-features=AutomationControlled")
         chrome_options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                                     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -62,7 +63,7 @@ class LaredoScraper:
         self.flow_log = {}
         self.combined_records_all = []
 
-    # ---------- Utility Methods ----------
+    # ---------- Utility ----------
     def _save_screenshot(self, name: str):
         try:
             path = os.path.join(self.OUT_DIR, f"{name}.png")
@@ -93,7 +94,7 @@ class LaredoScraper:
             pass
 
     def _wait_for(self, xpath, multiple=False):
-        for _ in range(8):
+        for _ in range(10):
             try:
                 if multiple:
                     return self.wait.until(
@@ -103,7 +104,7 @@ class LaredoScraper:
                     EC.visibility_of_element_located((By.XPATH, xpath))
                 )
             except Exception:
-                time.sleep(1)
+                time.sleep(0.8)
         return None
 
     @staticmethod
@@ -154,7 +155,7 @@ class LaredoScraper:
         except Exception as e:
             self._write_log(f"Error intercepting: {e}")
 
-        # Always save a raw copy for debugging
+        # Save debug copy
         try:
             with open(os.path.join(self.OUT_DIR, "_debug_last_search.json"), "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
@@ -271,7 +272,7 @@ class LaredoScraper:
                     pass
                 start.send_keys(self._start_date_str())
 
-            # End Date (if present)
+            # End Date
             end = self._wait_for("//input[@placeholder='Enter an end date']")
             if end:
                 try:
@@ -314,24 +315,25 @@ class LaredoScraper:
                 EC.visibility_of_element_located((By.XPATH, "//button[contains(@class,'run-btn')]"))
             )
             run_btn.click()
+
+            # give time for results to render
             time.sleep(10)
             self._save_screenshot("debug_after_search")
             self._save_html("debug_after_search")
         except Exception as e:
             self._write_log(f"Fill form error: {e}")
 
-    # ---------- Date parsing helpers ----------
+    # ---------- Date parsing ----------
     @staticmethod
     def _try_parse_date(s: str, fmts):
         for fmt in fmts:
             try:
-                return datetime.strptime(s, fmt)
+                return datetime.strptime(s.strip(), fmt)
             except Exception:
                 continue
         return None
 
     def _extract_doc_date(self, doc) -> str:
-        # Try several fields commonly observed
         candidates = [
             doc.get("docDate"),
             doc.get("docDateDisplay"),
@@ -342,21 +344,14 @@ class LaredoScraper:
         for val in candidates:
             if not val:
                 continue
-            # Try ISO first
             if isinstance(val, str) and "T" in val:
                 dt = self._try_parse_date(val, ["%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%S.%f"])
                 if dt:
                     return dt.strftime("%m/%d/%Y")
-            # Try display formats
             if isinstance(val, str):
                 dt = self._try_parse_date(
                     val,
-                    [
-                        "%b %d, %Y",
-                        "%m/%d/%Y",
-                        "%b %d, %Y, %I:%M %p",
-                        "%Y-%m-%d",
-                    ],
+                    ["%b %d, %Y", "%m/%d/%Y", "%b %d, %Y, %I:%M %p", "%Y-%m-%d"],
                 )
                 if dt:
                     return dt.strftime("%m/%d/%Y")
@@ -373,46 +368,115 @@ class LaredoScraper:
         for val in candidates:
             if not val:
                 continue
-            # ISO
             if isinstance(val, str) and "T" in val:
                 dt = self._try_parse_date(val, ["%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%S.%f"])
                 if dt:
                     return dt.strftime("%m/%d/%Y, %I:%M %p")
-            # Display
             if isinstance(val, str):
-                dt = self._try_parse_date(
-                    val,
-                    [
-                        "%b %d, %Y, %I:%M %p",
-                        "%m/%d/%Y, %I:%M %p",
-                        "%b %d, %Y",
-                        "%m/%d/%Y",
-                        "%Y-%m-%d",
-                    ],
-                )
+                # try with time first, then date only
+                dt = self._try_parse_date(val, ["%b %d, %Y, %I:%M %p", "%m/%d/%Y, %I:%M %p"])
                 if dt:
-                    # If time not present, just output date w/ time missing
-                    if any(fmt in ["%b %d, %Y, %I:%M %p", "%m/%d/%Y, %I:%M %p"] for fmt in ["%b %d, %Y, %I:%M %p", "%m/%d/%Y, %I:%M %p"]):
-                        return dt.strftime("%m/%d/%Y, %I:%M %p")
-                    # else date only
+                    return dt.strftime("%m/%d/%Y, %I:%M %p")
+                dt = self._try_parse_date(val, ["%b %d, %Y", "%m/%d/%Y", "%Y-%m-%d"])
+                if dt:
                     return dt.strftime("%m/%d/%Y")
         return ""
 
+    # ---------- NEW: Read dates from the visible table ----------
+    def _collect_table_dates(self):
+        """
+        Scrape the rendered results table to build:
+        { 'DocNumber' : {'doc_date': 'MM/DD/YYYY', 'recorded_date': 'MM/DD/YYYY[, HH:MM AM/PM]'} }
+        """
+        result = {}
+        try:
+            # Find header cells and determine column indexes
+            header_ths = self.driver.find_elements(By.XPATH, "//table[contains(@class,'p-datatable-table')]//thead//th")
+            col_map = {}
+            for idx, th in enumerate(header_ths):
+                label = (th.text or "").strip().lower()
+                if "doc number" in label:
+                    col_map["doc_number"] = idx
+                elif label == "doc date":
+                    col_map["doc_date"] = idx
+                elif "recorded date" in label:
+                    col_map["recorded_date"] = idx
+
+            # If we didn't find needed columns, bail
+            if not all(k in col_map for k in ["doc_number", "doc_date", "recorded_date"]):
+                return result
+
+            # Iterate rows
+            rows = self.driver.find_elements(By.XPATH, "//table[contains(@class,'p-datatable-table')]//tbody/tr")
+            for r in rows:
+                tds = r.find_elements(By.XPATH, "./td")
+                try:
+                    dn = (tds[col_map["doc_number"]].text or "").strip()
+                    dd_raw = (tds[col_map["doc_date"]].text or "").strip()
+                    rd_raw = (tds[col_map["recorded_date"]].text or "").strip()
+
+                    # Normalize via the same parsers
+                    dd_norm = ""
+                    rd_norm = ""
+
+                    if dd_raw:
+                        dt = self._try_parse_date(dd_raw, ["%b %d, %Y", "%m/%d/%Y", "%Y-%m-%d"])
+                        if dt:
+                            dd_norm = dt.strftime("%m/%d/%Y")
+
+                    if rd_raw:
+                        dt = self._try_parse_date(rd_raw, ["%b %d, %Y, %I:%M %p", "%m/%d/%Y, %I:%M %p"])
+                        if dt:
+                            rd_norm = dt.strftime("%m/%d/%Y, %I:%M %p")
+                        else:
+                            dt = self._try_parse_date(rd_raw, ["%b %d, %Y", "%m/%d/%Y", "%Y-%m-%d"])
+                            if dt:
+                                rd_norm = dt.strftime("%m/%d/%Y")
+
+                    if dn:
+                        result[dn] = {"doc_date": dd_norm, "recorded_date": rd_norm}
+                except Exception as er:
+                    self._write_log(f"_collect_table_dates row error: {er}")
+
+        except Exception as e:
+            self._write_log(f"_collect_table_dates error: {e}")
+
+        # Save for debugging
+        try:
+            with open(os.path.join(self.OUT_DIR, "_debug_table_dates.json"), "w", encoding="utf-8") as f:
+                json.dump(result, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+        return result
+
     # ---------- Data shaping ----------
-    def _clean_results(self, county_slug, docs_list):
+    def _clean_results(self, county_slug, docs_list, table_dates_map):
         out = []
         doc_id = 1
         for doc in docs_list or []:
             try:
+                doc_number = str(doc.get("userDocNo", "") or "").strip()
+
+                # primary (API) extraction
+                api_doc_date = self._extract_doc_date(doc)
+                api_rec_date = self._extract_recorded_date(doc)
+
+                # fallback from table
+                if (not api_doc_date or not api_doc_date.strip()) and doc_number in table_dates_map:
+                    api_doc_date = table_dates_map[doc_number].get("doc_date", "") or api_doc_date
+                if (not api_rec_date or not api_rec_date.strip()) and doc_number in table_dates_map:
+                    api_rec_date = table_dates_map[doc_number].get("recorded_date", "") or api_rec_date
+
                 nd = {
                     "id": f"{county_slug}-{doc_id}",
-                    "Doc Number": str(doc.get("userDocNo", "")),
+                    "Doc Number": doc_number,
                     "Party": f"{doc.get('partyOne','')}" + (
                         f" ({doc.get('partyOneType')})" if doc.get("partyOneType") else ""
                     ),
                     "Book & Page": doc.get("bookPage", ""),
-                    "Doc Date": self._extract_doc_date(doc),
-                    "Recorded Date": self._extract_recorded_date(doc),
+                    "Doc Date": api_doc_date or "",
+                    "Recorded Date": api_rec_date or "",
                     "Doc Type": doc.get("docType", ""),
                     "Assoc Doc": doc.get("assocDocSummary", ""),
                     "Legal Summary": doc.get("legalSummary", ""),
@@ -543,17 +607,24 @@ class LaredoScraper:
                     if self._connect_county(county_name, idx):
                         self._close_popup()
                         self._fill_form(county_name, second_pass=second)
+
+                        # 1) collect visible table dates (fallback source)
+                        table_dates = self._collect_table_dates()
+
+                        # 2) intercept API payload
                         intercepted = self._intercept_after_search()
                         docs = intercepted.get("docs_list", []) or []
                         token = intercepted.get("auth_token", "")
 
                         print(f"Intercepted docs: {len(docs)}")
-                        cleaned = self._clean_results(slug, docs)
+
+                        # 3) shape & combine
+                        cleaned = self._clean_results(slug, docs, table_dates)
                         grouped = self._group_by_doc_number(cleaned)
                         ids = self._id_map(docs)
                         combined = self._combine_records(token, ids, grouped) if cleaned else []
 
-                        # Always write a per-county file (even if empty)
+                        # 4) write per-county JSON
                         name = f"{slug}_resolution" if second else slug
                         self._write_json(combined, name)
                         if combined:
