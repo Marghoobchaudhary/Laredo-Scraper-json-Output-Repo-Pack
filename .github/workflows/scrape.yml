@@ -14,7 +14,7 @@ on:
       wait_seconds:
         description: "UI wait seconds"
         type: number
-        default: 20      # a bit higher for reliability
+        default: 30
       max_parties:
         description: "How many Party columns (Party1..N)"
         type: number
@@ -23,6 +23,14 @@ on:
         description: "Space-separated county indices for second pass (e.g. '1 2')"
         type: string
         default: "1 2"
+      days_back:
+        description: "Skip rows with Doc Date older than N days (0 to disable)"
+        type: number
+        default: 2
+      start_url:
+        description: "Direct URL to results table page (recommended)"
+        type: string
+        default: ""
       push_results:
         description: "Commit JSON/results back to repo"
         type: boolean
@@ -38,6 +46,8 @@ jobs:
     env:
       LAREDO_USERNAME: ${{ secrets.LAREDO_USERNAME }}
       LAREDO_PASSWORD: ${{ secrets.LAREDO_PASSWORD }}
+      # If you want, you can store a default in a secret and fall back to it:
+      LAREDO_URL: ${{ secrets.LAREDO_URL }}
       OUT_DIR: ${{ inputs.out_dir || 'files' }}
 
     steps:
@@ -80,21 +90,40 @@ jobs:
             --out "${{ env.OUT_DIR }}" \
             --wait ${{ inputs.wait_seconds }} \
             --max-parties ${{ inputs.max_parties }} \
-            --rescrape-indices "${{ inputs.rescrape_indices }}"
+            --days-back ${{ inputs.days_back }} \
+            --rescrape-indices "${{ inputs.rescrape_indices }}" \
+            --start-url "${{ inputs.start_url || env.LAREDO_URL }}"
 
       - name: List outputs for debugging
         if: always()
         run: |
           echo "=== GIT STATUS ==="
           git status
-          echo "=== TREE ==="
+          echo "=== TREE (repo root) ==="
           ls -la
           echo "=== OUT_DIR LISTING ==="
           ls -la "${{ env.OUT_DIR }}" || true
           echo "=== LOG PREVIEW ==="
           tail -n 200 laredo.logs || true
+          echo "=== Flow log preview ==="
+          tail -n 200 laredo-flow-logs.json || true
+          echo "=== If present, saved HTML title ==="
+          python - <<'PY'
+import os, re
+p="laredo_page.html"
+if os.path.exists(p):
+    import bs4
+    from bs4 import BeautifulSoup
+    with open(p, "r", encoding="utf-8", errors="ignore") as f:
+        s=BeautifulSoup(f, "html.parser")
+        print("HTML <title>:", (s.title.string if s.title else "").strip())
+else:
+    print("No laredo_page.html saved")
+PY
+          echo "=== If present, screenshot file size ==="
+          [ -f laredo_page.png ] && ls -la laredo_page.png || echo "No laredo_page.png saved"
 
-      - name: Upload JSON and logs as artifact (convenience)
+      - name: Upload JSON, logs, HTML and screenshot as artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -103,6 +132,8 @@ jobs:
             ${{ env.OUT_DIR }}/
             laredo-flow-logs.json
             laredo.logs
+            laredo_page.html
+            laredo_page.png
 
       - name: Commit results to repo
         if: ${{ inputs.push_results }}
@@ -114,7 +145,8 @@ jobs:
           git add -f "${{ env.OUT_DIR }}/.gitkeep" 2>/dev/null || true
           git add -f "${{ env.OUT_DIR }}"/*.json 2>/dev/null || true
           git add -f "${{ env.OUT_DIR }}"/*.csv 2>/dev/null || true
-          git add laredo-flow-logs.json laredo.logs 2>/dev/null || true
+          git add -f laredo-flow-logs.json laredo.logs 2>/dev/null || true
+          git add -f laredo_page.html laredo_page.png 2>/dev/null || true
 
-          git commit -m "chore: update Laredo JSON $(date -u +'%Y-%m-%dT%H:%M:%SZ')" || echo "No changes to commit"
+          git commit -m "chore: update Laredo outputs $(date -u +'%Y-%m-%dT%H:%M:%SZ')" || echo "No changes to commit"
           git push || true
