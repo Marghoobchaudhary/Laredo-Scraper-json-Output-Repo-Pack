@@ -1,706 +1,453 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+Laredo scraper
+- Scrapes the PrimeNG table (role="table") you shared
+- Captures Doc Number, Party cells (with role chip), Book & Page, Doc Date, Recorded Date, Doc Type,
+  Assoc Doc, Legal Summary, Consideration, Additional Party, Pages
+- Aggregates duplicate Doc Numbers into a single record, filling Party1..PartyN
+- Robust handling of --rescrape-indices ("1 2", "1,2", "'1 2'") and optional --only-counties
+"""
+
 import os
-import time
-import json
+import re
 import csv
+import sys
+import json
+import time
 import argparse
 from datetime import datetime, timedelta
+from collections import OrderedDict, defaultdict
 
-import requests
-from slugify import slugify
-
+# --- Selenium imports
 from selenium import webdriver
 from selenium.webdriver.common.by import By
-from selenium.webdriver.common.action_chains import ActionChains
+from selenium.webdriver.chrome.options import Options as ChromeOptions
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import StaleElementReferenceException, TimeoutException
 
+# --------------- Utility: logging ---------------
 
-class Laredo:
-    def __init__(
-        self,
-        headless=True,
-        out_dir="files",
-        wait_seconds=20,
-        max_parties=6,
-        days_back=2,
-        rescrape_indices=None,
-        only_counties=None,
-        hard_timeout=None,
-    ):
-        self.flow_start_time = time.time()
-        self.WAIT_DURATION = int(wait_seconds)
-        self.wait = None
-        self.OUTPUT_DIRECTORY = out_dir
-        os.makedirs(self.OUTPUT_DIRECTORY, exist_ok=True)
+LOG_FILE = "laredo.logs"
+FLOW_LOG = "laredo-flow-logs.json"
 
-        self.max_parties = int(max_parties)
-        self.days_back = int(days_back)
+def log(msg: str):
+    timestamp = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    line = f"[{timestamp}] {msg}"
+    print(line, flush=True)
+    try:
+        with open(LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception:
+        pass
 
-        # Robust parsing of rescrape indices:
-        # supports: ["1","2"], "1 2", "'1 2'", or None
-        self.rescrape_indices = []
-        if isinstance(rescrape_indices, list):
-            tokens = []
-            for t in rescrape_indices:
-                tokens.extend(str(t).split())
-            self.rescrape_indices = [int(i) for i in tokens if str(i).strip().isdigit()]
-        elif rescrape_indices:
-            self.rescrape_indices = [
-                int(i) for i in str(rescrape_indices).split() if str(i).strip().isdigit()
-            ]
+def write_flow_log(data):
+    try:
+        with open(FLOW_LOG, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        log(f"Failed writing flow log: {e}")
 
-        # If provided, only scrape these county names (exact, comma-separated)
-        self.only_counties = (
-            [c.strip() for c in only_counties.split(",")] if only_counties else None
-        )
-        self.hard_timeout = int(hard_timeout) if hard_timeout else None
+# --------------- CLI args ---------------
 
-        # Selenium setup
-        chrome_options = webdriver.ChromeOptions()
-        if headless:
-            chrome_options.add_argument("--headless=new")
-        chrome_options.add_argument("--disable-gpu")
-        chrome_options.add_argument("--no-sandbox")
-        chrome_options.add_argument("--disable-dev-shm-usage")
-        chrome_options.set_capability("goog:loggingPrefs", {"performance": "ALL"})
-        self.driver = webdriver.Chrome(options=chrome_options)
-        self.driver.maximize_window()
-        self.driver.execute_cdp_cmd("Network.enable", {})
-
-        self.action_chains = ActionChains(self.driver)
-        self.wait = WebDriverWait(self.driver, self.WAIT_DURATION)
-        self.flow_log = {}
-
-    # ----------------- utilities & logging -----------------
-
-    def __write_flow_logs(self):
+def parse_indices(s: str):
+    """
+    Accepts:
+      - '1 2'
+      - "1,2"
+      - "'1 2'"
+      - " 1   2 , 3 "
+    Returns [1, 2, 3] as ints
+    """
+    if not s:
+        return []
+    s = s.strip()
+    # Remove wrapping quotes if present
+    if (s.startswith("'") and s.endswith("'")) or (s.startswith('"') and s.endswith('"')):
+        s = s[1:-1]
+    # Replace commas with spaces, then split
+    parts = re.split(r"[\s,]+", s.strip())
+    out = []
+    for p in parts:
+        if not p:
+            continue
         try:
-            with open("laredo-flow-logs.json", "w") as f:
-                f.write(json.dumps(self.flow_log, indent=2))
-        except Exception as e:
-            print("Error in __write_flow_logs():", e)
-            self.__write_log(e)
-
-    def __write_log(self, msg):
-        try:
-            with open("laredo.logs", "a") as f:
-                f.write(str(msg) + "\n")
-        except Exception as e:
-            print("Error in write_log():", e)
-
-    def __wait_for_element(self, xpath, multiple=False):
-        for _ in range(5):
-            try:
-                if multiple:
-                    return self.wait.until(
-                        EC.visibility_of_all_elements_located((By.XPATH, xpath))
-                    )
-                else:
-                    return self.wait.until(
-                        EC.visibility_of_element_located((By.XPATH, xpath))
-                    )
-            except TimeoutException:
-                print(f"'{xpath}' not found yet, retrying...")
-        return False
-
-    # ----------------- auth & navigation -----------------
-
-    def __login(self):
-        is_logged_in = False
-        try:
-            self.driver.get("https://www.laredoanywhere.com/")
-            username = self.__wait_for_element(
-                "//input[@id='username']", multiple=False
-            )
-            if not username:
-                return False
-
-            username_val = os.getenv("LAREDO_USERNAME") or "YOUGOGIRL"
-            password_val = os.getenv("LAREDO_PASSWORD") or "WEINERT!"
-
-            username.send_keys(username_val)
-            password = self.__wait_for_element("//input[@id='password']", False)
-            password.send_keys(password_val)
-            login = self.__wait_for_element("//button", False)
-            login.click()
-            time.sleep(8)
-            if self.__wait_for_element(
-                "//div[contains(@class, 'button-wrapper')]", multiple=False
-            ):
-                is_logged_in = True
-                self.flow_log["login_status"] = "success"
-        except Exception as e:
-            print("Error in login()", e)
-            self.__write_log(e)
-            self.flow_log["login_status"] = "failed"
-        return is_logged_in
-
-    def __logout(self):
-        try:
-            logout_buttons = self.__wait_for_element(
-                "//button[contains(@class,'nav-button')]", True
-            )
-            if logout_buttons:
-                logout_button = list(logout_buttons)[-1]
-                if "Sign out" in logout_button.text:
-                    logout_button.click()
-                    time.sleep(3)
-                    yes_button = self.__wait_for_element(
-                        "//button[contains(@class,'mobile-dialog-button')]", False
-                    )
-                    if yes_button:
-                        yes_button.click()
-                    self.flow_log["logout"] = "success"
-                    time.sleep(3)
-        except Exception as e:
-            print("Error in logout()", e)
-            self.__write_log(e)
-            self.flow_log["logout"] = "failed"
-
-    def __get_counties(self):
-        counties = []
-        try:
-            counties = self.__wait_for_element(
-                "//div[contains(@class, 'button-wrapper')]", True
-            )
-        except Exception as e:
-            print("Error in __get_counties():", e)
-            self.__write_log(e)
-        return list(counties) if counties else []
-
-    def __connect_county(self, county_name, county_index):
-        try:
-            counties = self.__get_counties()
-            if county_index >= len(counties):
-                raise Exception(f"County index {county_index} out of range")
-            county = counties[county_index]
-
-            for _ in range(3):
-                try:
-                    time.sleep(3)
-                    self.action_chains.move_to_element(county).perform()
-                    county.click()
-                    disconnect_button = self.wait.until(
-                        EC.visibility_of_element_located(
-                            (By.XPATH, "//button[@type='button']")
-                        )
-                    )
-                    if disconnect_button.text.strip() == "Disconnect":
-                        self.flow_log[county_name] = {"connected": "success"}
-                        return True
-                except StaleElementReferenceException:
-                    time.sleep(2)
-                    counties = self.__get_counties()
-                    county = counties[county_index]
-            raise Exception("Failed to connect after retries")
-        except Exception as e:
-            print(f"Error in connect_county() for {county_name}: {e}")
-            self.__write_log(e)
-            self.flow_log[county_name] = {"connected": "failed"}
-            return False
-
-    def __disconnect_county(self, county_name):
-        try:
-            disconnect_button = self.__wait_for_element(
-                "//button[@type='button']", False
-            )
-            if disconnect_button and disconnect_button.text.strip() == "Disconnect":
-                disconnect_button.click()
-                self.flow_log[county_name]["disconnected"] = "success"
-                time.sleep(4)
-        except Exception as e:
-            print("Error in disconnect_county()", e)
-            self.__write_log(e)
-            self.flow_log[county_name]["disconnected"] = "failed"
-
-    def __close_popup(self):
-        try:
-            time.sleep(2)
-            close_popup = self.__wait_for_element(
-                "//i[contains(@class, 'fa-xmark')]", False
-            )
-            if close_popup:
-                close_popup.click()
-        except Exception as e:
-            print("Error in close_popup()", e)
-            self.__write_log(e)
-
-    # ----------------- search & intercept -----------------
-
-    def __get_start_date_mmddyyyy(self):
-        # start date is today - N days, end date is today (UI defaults end to today)
-        start_dt = datetime.today() - timedelta(days=self.days_back)
-        return start_dt.strftime("%m%d%Y")
-
-    def __fill_form(self, county_name, second_pass=False):
-        try:
-            time.sleep(2)
-            start_date = self.__wait_for_element(
-                "//input[@placeholder='Enter a start date']", False
-            )
-            if start_date:
-                start_date.clear()
-                start_date.send_keys(self.__get_start_date_mmddyyyy())
-
-            time.sleep(1)
-            search_dropdown_div = self.wait.until(
-                EC.visibility_of_element_located(
-                    (By.XPATH, "//p-dropdown[@formcontrolname='selectedDocumentType']")
-                )
-            )
-            search_dropdown_div.click()
-            time.sleep(1)
-
-            search_input_field = self.wait.until(
-                EC.visibility_of_element_located(
-                    (By.XPATH, "//input[contains(@class, 'p-dropdown-filter')]")
-                )
-            )
-            if second_pass:
-                search_input_field.send_keys("RESOLUTION")
-            else:
-                if county_name.strip() == "Jefferson County":
-                    search_input_field.send_keys("APPOINTMENT")
-                else:
-                    search_input_field.send_keys("Successor")
-            time.sleep(1)
-            first_search_option = self.wait.until(
-                EC.visibility_of_element_located((By.XPATH, "//li[@role='option']"))
-            )
-            first_search_option.click()
-
-            time.sleep(1)
-            run_search_button = self.wait.until(
-                EC.visibility_of_element_located(
-                    (By.XPATH, "//button[contains(@class,'run-btn')]")
-                )
-            )
-            run_search_button.click()
-            time.sleep(max(6, self.WAIT_DURATION // 2))
-        except Exception as e:
-            print("Error in __fill_form()", e)
-            self.__write_log(e)
-
-    def __intercept(self):
-        """
-        Read Chrome performance logs to capture:
-          - the 'advance/search' JSON response (docs list)
-          - the Authorization header (bearer) used by the site (if visible)
-        """
-        data = {"docs_list": [], "auth_token": ""}
-        try:
-            logs = self.driver.get_log("performance")
-            for entry in logs:
-                try:
-                    message = json.loads(entry["message"])["message"]
-                    method = message.get("method", "")
-                    if method == "Network.responseReceived":
-                        params = message.get("params", {})
-                        url = params.get("response", {}).get("url", "")
-                        if url.endswith("api/advance/search"):
-                            request_id = params.get("requestId")
-                            body = self.driver.execute_cdp_cmd(
-                                "Network.getResponseBody", {"requestId": request_id}
-                            )
-                            response_body = body.get("body")
-                            docs_data = json.loads(response_body) if response_body else {}
-                            if "documentList" in docs_data:
-                                data["docs_list"] = docs_data["documentList"]
-
-                    elif method == "Network.requestWillBeSent":
-                        params = message.get("params", {})
-                        headers = params.get("request", {}).get("headers", {})
-                        auth = headers.get("Authorization")
-                        if auth and not data["auth_token"]:
-                            data["auth_token"] = auth
-                except Exception as ex:
-                    self.__write_log(f"Error parsing log entry: {ex}")
-        except Exception as e:
-            self.__write_log(f"Error in __intercept(): {e}")
-        return data
-
-    # ----------------- NEW: read dates from the table -----------------
-
-    def __parse_doc_date_text(self, s):
-        s = (s or "").strip()
-        if not s:
-            return ""
-        for fmt in ["%b %d, %Y", "%B %d, %Y"]:
-            try:
-                dt = datetime.strptime(s, fmt)
-                return dt.strftime("%m/%d/%Y")
-            except Exception:
-                pass
-        return s
-
-    def __parse_recorded_date_text(self, s):
-        s = (s or "").strip()
-        if not s:
-            return ""
-        tried = [
-            "%b %d, %Y, %I:%M %p",
-            "%B %d, %Y, %I:%M %p",
-            "%b %d, %Y %I:%M %p",
-            "%B %d, %Y %I:%M %p",
-        ]
-        for fmt in tried:
-            try:
-                dt = datetime.strptime(s, fmt)
-                return dt.strftime("%m/%d/%Y, %I:%M %p")
-            except Exception:
-                pass
-        return s
-
-    def __scrape_table_dates_map(self):
-        """
-        Build: { 'DOCNO': {'Doc Date': 'MM/DD/YYYY', 'Recorded Date': 'MM/DD/YYYY, HH:MM AM/PM'} }
-        Assumes 'column-data' TD order matches Doc Number, Party, Book & Page, Doc Date, Recorded Date, ...
-        """
-        mapping = {}
-        try:
-            _tbody = self.__wait_for_element("//tbody[contains(@class,'p-datatable-tbody')]", False)
-            if not _tbody:
-                return mapping
-
-            rows = self.driver.find_elements(By.CSS_SELECTOR, "tbody.p-datatable-tbody tr")
-            for row in rows:
-                cols = row.find_elements(By.CSS_SELECTOR, "td.column-data")
-                if len(cols) < 5:
-                    continue
-                doc_no = cols[0].text.strip()
-                doc_date = cols[3].text.strip() if len(cols) > 3 else ""
-                rec_date = cols[4].text.strip() if len(cols) > 4 else ""
-
-                parsed_doc = self.__parse_doc_date_text(doc_date)
-                parsed_rec = self.__parse_recorded_date_text(rec_date)
-                if doc_no:
-                    mapping[doc_no] = {
-                        "Doc Date": parsed_doc,
-                        "Recorded Date": parsed_rec,
-                    }
-        except Exception as e:
-            self.__write_log(f"__scrape_table_dates_map error: {e}")
-        return mapping
-
-    # ----------------- detail enrichment -----------------
-
-    def get_doc_details(self, auth_token, search_doc_id):
-        doc_details = {"addresses": [], "parcels": []}
-        try:
-            headers = {
-                "Accept": "application/json, text/plain, */*",
-                "Content-Type": "application/json",
-                "Authorization": f"{auth_token}" if auth_token else "",
-                "User-Agent": "Mozilla/5.0",
-            }
-            data = {
-                "searchDocId": search_doc_id,
-                "searchResultId": None,
-                "searchResultAuthCode": None,
-            }
-            resp = requests.post(
-                "https://www.laredoanywhere.com/LaredoAnywhere/LaredoAnywhere.WebService/api/docDetail",
-                headers=headers,
-                json=data,
-                timeout=30,
-            )
-            if resp.ok:
-                jr = resp.json()
-                legal_list = (
-                    jr.get("document", {}).get("legalList", []) if isinstance(jr, dict) else []
-                )
-                address_list, parcel_list = [], []
-                for legal in legal_list:
-                    if legal.get("legalType") == "A":
-                        address_list.append(legal.get("description", ""))
-                    elif legal.get("legalType") == "P":
-                        parcel_list.append(legal.get("description", ""))
-                doc_details["addresses"] = address_list
-                doc_details["parcels"] = parcel_list
-        except Exception as e:
-            self.__write_log(f"Error in get_doc_details(): {e}")
-        return doc_details
-
-    # ----------------- transformation -----------------
-
-    def get_grouped_data(self, clean_data):
-        grouped = {}
-        try:
-            for record in clean_data:
-                doc_number = record.get("Doc Number", "")
-                if doc_number in grouped:
-                    grouped[doc_number].append(record)
-                else:
-                    grouped[doc_number] = [record]
-        except Exception as e:
-            self.__write_log(f"Error in get_grouped_data(): {e}")
-        return grouped
-
-    def get_map(self, data_list):
-        mapping = {}
-        try:
-            for data in data_list:
-                if data.get("userDocNo") not in mapping:
-                    mapping[data.get("userDocNo")] = data.get("searchDocId")
-        except Exception as e:
-            self.__write_log(f"Error in get_map(): {e}")
-        return mapping
-
-    def get_combined_records(self, auth_token, doc_id_map, grouped_data):
-        new_records_list = []
-        try:
-            records_list = []
-            max_parties = max_addresses = max_parcels = 0
-            for doc_number, records in grouped_data.items():
-                old_record = records[0]
-                if doc_number in doc_id_map:
-                    old_record.update(self.get_doc_details(auth_token, doc_id_map[doc_number]))
-                records[0] = old_record
-
-                max_parties = max(max_parties, len(records))
-                max_addresses = max(max_addresses, len(old_record.get("addresses", [])))
-                max_parcels = max(max_parcels, len(old_record.get("parcels", [])))
-                records_list.append(records)
-
-            max_parties = max(self.max_parties, max_parties)
-
-            def combine_dummies(max_entities, key_value, linked_records, out_record):
-                if key_value == "Party":
-                    all_vals = [r["Party"] for r in linked_records]
-                    all_vals += [""] * (max_entities - len(all_vals))
-                    for idx, val in enumerate(all_vals, 1):
-                        out_record[f"Party{idx}"] = val
-                else:
-                    all_vals = linked_records[0].get(key_value, [])
-                    all_vals += [""] * (max_entities - len(all_vals))
-                    label = "Address" if key_value == "addresses" else "Parcel"
-                    for idx, val in enumerate(all_vals, 1):
-                        out_record[f"{label}{idx}"] = val
-
-            for linked in records_list:
-                out_rec = {}
-                old = linked[0]
-                for key in old:
-                    if key == "Party":
-                        combine_dummies(max_parties, key, linked, out_rec)
-                    elif key == "addresses":
-                        combine_dummies(len(old.get("addresses", [])), "addresses", linked, out_rec)
-                    elif key == "parcels":
-                        combine_dummies(len(old.get("parcels", [])), "parcels", linked, out_rec)
-                    else:
-                        out_rec[key] = old[key]
-                new_records_list.append(out_rec)
-        except Exception as e:
-            self.__write_log(f"Error in get_combined_records(): {e}")
-        return new_records_list
-
-    # ----------------- cleaning & writing -----------------
-
-    def __clean_data(self, county_slug, docs_list, table_date_map):
-        doc_id = 1
-        new_docs_list = []
-        for doc in docs_list:
-            try:
-                doc_no = str(doc.get("userDocNo", "")).strip()
-                party_one = (doc.get("partyOne") or "").strip()
-                party_one_type = (doc.get("partyOneType") or "").strip()
-                party = f"{party_one}{f' ({party_one_type})' if party_one_type else ''}"
-
-                new_doc = {
-                    "id": f"{county_slug}-{doc_id}",
-                    "Doc Number": doc_no,
-                    "Party": party,
-                    "Book & Page": doc.get("bookPage"),
-                    "Doc Date": "",
-                    "Recorded Date": "",
-                    "Doc Type": doc.get("docType") or "",
-                    "Assoc Doc": (doc.get("assocDocSummary") or ""),
-                    "Legal Summary": (doc.get("legalSummary") or ""),
-                    "Consideration": f"${doc.get('consideration', 0) or 0.0}".replace("$$", "$"),
-                    "Pages": doc.get("pages", ""),
-                }
-
-                api_doc_date = doc.get("docDate") or doc.get("documentDate")
-                api_rec_date = doc.get("docRecordedDateTime") or doc.get("recordedDateTime")
-
-                if api_doc_date:
-                    parsed = None
-                    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
-                        try:
-                            parsed = datetime.strptime(api_doc_date, fmt)
-                            break
-                        except Exception:
-                            pass
-                    if parsed:
-                        new_doc["Doc Date"] = parsed.strftime("%m/%d/%Y")
-
-                if api_rec_date:
-                    parsed = None
-                    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%S.%f"):
-                        try:
-                            parsed = datetime.strptime(api_rec_date, fmt)
-                            break
-                        except Exception:
-                            pass
-                    if parsed:
-                        new_doc["Recorded Date"] = parsed.strftime("%m/%d/%Y, %I:%M %p")
-
-                if doc_no in table_date_map:
-                    if not new_doc["Doc Date"]:
-                        new_doc["Doc Date"] = table_date_map[doc_no].get("Doc Date", "")
-                    if not new_doc["Recorded Date"]:
-                        new_doc["Recorded Date"] = table_date_map[doc_no].get("Recorded Date", "")
-
-                new_docs_list.append(new_doc)
-            except Exception as e:
-                self.__write_log(f"Error in __clean_data(): {e}")
-            doc_id += 1
-        return new_docs_list
-
-    def __write_json(self, data, filename):
-        try:
-            path = os.path.join(self.OUTPUT_DIRECTORY, f"{filename}.json")
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-            print(f"JSON file '{path}' written.")
-        except Exception as e:
-            print("Error in __write_json():", e)
-            self.__write_log(e)
-
-    # ----------------- main flow -----------------
-
-    def extract_data(self):
-        try:
-            if self.hard_timeout and (time.time() - self.flow_start_time) > self.hard_timeout:
-                raise TimeoutError("Hard timeout reached before start")
-
-            if not self.__login():
-                return
-
-            available_counties = self.__get_counties()
-            total_counties = len(available_counties)
-            print("Total Counties:", total_counties)
-
-            county_names = []
-            for idx in range(total_counties):
-                try:
-                    name = self.driver.find_elements(
-                        By.XPATH, '//span[contains(@class, "county-name")]'
-                    )[idx].text.strip()
-                except Exception:
-                    name = f"county-{idx}"
-                county_names.append((idx, name))
-
-            current = 0
-            scrape_count = {}
-
-            while current < total_counties:
-                idx, county_name = county_names[current]
-
-                if self.only_counties and county_name not in self.only_counties:
-                    current += 1
-                    continue
-
-                if self.hard_timeout and (time.time() - self.flow_start_time) > self.hard_timeout:
-                    raise TimeoutError("Hard timeout reached during scraping")
-
-                try:
-                    county_slug = slugify(county_name)
-                    print(f"Scraping {county_name}")
-
-                    count = scrape_count.get(idx, 0)
-                    second_pass = count == 1 and idx in self.rescrape_indices
-
-                    if self.__connect_county(county_name, idx):
-                        self.__close_popup()
-                        self.__fill_form(county_name, second_pass=second_pass)
-
-                        table_date_map = self.__scrape_table_dates_map()
-                        intercept_data = self.__intercept()
-                        docs_list = intercept_data.get("docs_list", [])
-                        auth_token = intercept_data.get("auth_token", "")
-
-                        cleaned_docs_list = self.__clean_data(
-                            county_slug, docs_list, table_date_map
-                        )
-
-                        if cleaned_docs_list:
-                            grouped_data = self.get_grouped_data(cleaned_docs_list)
-                            doc_id_map = self.get_map(docs_list)
-                            combined_records = self.get_combined_records(
-                                auth_token, doc_id_map, grouped_data
-                            )
-                            if combined_records:
-                                filename = f"{county_slug}_resolution" if second_pass else county_slug
-                                self.__write_json(combined_records, filename)
-                                self.flow_log.setdefault(county_name, {})["data"] = "saved"
-                            else:
-                                print(
-                                    f"JSON not saved. Empty combined records for '{county_name}'"
-                                )
-                                self.flow_log.setdefault(county_name, {})["data"] = "not saved"
-
-                        self.__disconnect_county(county_name)
-
-                    scrape_count[idx] = count + 1
-                    if idx in self.rescrape_indices and scrape_count[idx] == 1:
-                        print(f"Re-scraping {county_name} for second pass")
-                        continue
-
-                    current += 1
-
-                except Exception as e:
-                    print(f"Error iterating counties: {e}")
-                    self.__write_log(e)
-                    current += 1
-
-            self.__logout()
-            self.driver.quit()
-            self.flow_log["time_taken_seconds"] = round(time.time() - self.flow_start_time, 1)
-            self.__write_flow_logs()
-
-        except Exception as e:
-            print("Error in extract_data():", e)
-            self.__write_log(e)
-            try:
-                self.driver.quit()
-            except Exception:
-                pass
-
-
-# ----------------- CLI -----------------
-
-def parse_args():
-    p = argparse.ArgumentParser()
-    p.add_argument("--headless", action="store_true", help="Run Chrome headless")
-    p.add_argument("--out", default="files", help="Output directory")
-    p.add_argument("--wait", type=int, default=20, help="UI wait seconds")
-    p.add_argument("--max-parties", type=int, default=6, help="Party1..PartyN")
-    p.add_argument("--days-back", type=int, default=2, help="Start = today - N days")
-    # Accept 0 or more values; supports: --rescrape-indices 1 2
-    # Also works if passed as a single quoted string.
-    p.add_argument(
-        "--rescrape-indices",
-        nargs="*",
-        default=None,
-        help="Space-separated indices for second pass (e.g. 1 2)",
+            out.append(int(p))
+        except ValueError:
+            # if it's not an int, ignore (keeps parser resilient)
+            log(f"Warning: ignoring non-integer rescrape index token: {p!r}")
+    return out
+
+def parse_list(s: str):
+    if not s:
+        return []
+    # comma or space separated
+    parts = re.split(r"[\s,]+", s.strip())
+    return [p for p in parts if p]
+
+def get_args():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--headless", action="store_true", help="Run headless")
+    ap.add_argument("--out", default=os.environ.get("OUT_DIR", "files"), help="Output directory")
+    ap.add_argument("--wait", type=int, default=15, help="UI wait seconds")
+    ap.add_argument("--max-parties", type=int, default=6, help="Number of Party fields (Party1..N)")
+    ap.add_argument("--days-back", type=int, default=2, help="Optional filter by Doc Date >= today - days-back")
+    ap.add_argument("--rescrape-indices", default="", help="Space/comma-separated indices for a second pass")
+    ap.add_argument("--only-counties", default="", help="Optional filter: only scrape these county slugs")
+    ap.add_argument("--hard-timeout", type=int, default=0, help="Hard kill after N seconds (0=disabled)")
+    ap.add_argument("--county-slug", default="st-charles-county", help="Slug used in output IDs and filenames")
+    ap.add_argument("--start-url", default=os.environ.get("LAREDO_URL", ""), help="Optional start URL")
+    return ap.parse_args()
+
+# --------------- Selenium setup ---------------
+
+def build_driver(headless: bool):
+    chrome_opts = ChromeOptions()
+    if headless:
+        # new headless is more reliable in CI
+        chrome_opts.add_argument("--headless=new")
+    chrome_opts.add_argument("--disable-gpu")
+    chrome_opts.add_argument("--no-sandbox")
+    chrome_opts.add_argument("--window-size=1920,1480")
+    chrome_opts.add_argument("--disable-dev-shm-usage")
+    chrome_opts.add_argument("--disable-blink-features=AutomationControlled")
+    chrome_prefs = {
+        "profile.default_content_setting_values.notifications": 2,
+        "download.prompt_for_download": False,
+    }
+    chrome_opts.add_experimental_option("prefs", chrome_prefs)
+
+    driver = webdriver.Chrome(options=chrome_opts)
+    driver.set_page_load_timeout(180)
+    return driver
+
+# --------------- Login / Navigation (optional) ---------------
+
+def maybe_login(driver, wait_secs: int):
+    """
+    If your site needs login, implement here.
+    Leave as no-op if already authenticated by cookie or the site is open.
+    """
+    username = os.environ.get("LAREDO_USERNAME", "")
+    password = os.environ.get("LAREDO_PASSWORD", "")
+    if not username or not password:
+        log("No LAREDO_USERNAME/PASSWORD in env — skipping login.")
+        return
+
+    try:
+        # Example only — replace selectors/flow as needed.
+        # driver.get("https://example.laredo.site/login")
+        # WebDriverWait(driver, wait_secs).until(EC.presence_of_element_located((By.CSS_SELECTOR, "input[name='username']"))).send_keys(username)
+        # driver.find_element(By.CSS_SELECTOR, "input[name='password']").send_keys(password)
+        # driver.find_element(By.CSS_SELECTOR, "button[type='submit']").click()
+        # WebDriverWait(driver, wait_secs).until(EC.presence_of_element_located((By.CSS_SELECTOR, "nav .user-badge")))
+        log("Login stub: implement if needed (skipped).")
+    except Exception as e:
+        log(f"Login skipped/failed: {e}")
+
+def navigate_to_results(driver, start_url: str, wait_secs: int):
+    """
+    If you have a direct URL to the results table, put it in --start-url or LAREDO_URL.
+    Otherwise, navigate to it here (stub).
+    """
+    if start_url:
+        log(f"Opening start URL: {start_url}")
+        driver.get(start_url)
+    else:
+        log("No --start-url provided; assuming we are already at results table.")
+    # Wait for the table to exist
+    WebDriverWait(driver, wait_secs).until(
+        EC.presence_of_element_located((By.CSS_SELECTOR, "table[role='table'] tbody tr"))
     )
-    p.add_argument("--only-counties", default="", help='Comma-separated county names (exact matches)')
-    p.add_argument("--hard-timeout", type=int, default=0, help="Hard stop seconds for whole flow")
-    return p.parse_args()
 
+# --------------- Table parsing ---------------
+
+def safe_text(el):
+    try:
+        return el.text.strip()
+    except Exception:
+        return ""
+
+def extract_party_and_role(td_elem):
+    """
+    In each 'Party' cell, the name is a <span> and the role chip is another <span> containing 'GRANTOR'/'GRANTEE'
+    We return "NAME (ROLE)" if role chip exists; else just NAME.
+    """
+    name = ""
+    role = ""
+    try:
+        name = safe_text(td_elem.find_element(By.CSS_SELECTOR, "span"))
+    except Exception:
+        name = safe_text(td_elem)
+
+    try:
+        chip = td_elem.find_element(By.CSS_SELECTOR, ".party-chip")
+        role_raw = safe_text(chip)
+        # Normalise role text (strip arrows etc.)
+        m = re.search(r"\b(GRANTOR|GRANTEE)\b", role_raw, re.IGNORECASE)
+        if m:
+            role = m.group(1).upper()
+    except Exception:
+        role = ""
+
+    return f"{name} ({role})" if name and role else name
+
+def parse_date_mmmd(s: str):
+    """
+    Parses 'Sep 10, 2025' or 'Sep 12, 2025, 8:27 AM' into a datetime.
+    Returns (dt, normalized_string) where normalized_string is original input (kept).
+    """
+    s_clean = s.strip()
+    if not s_clean:
+        return None, ""
+    # try with time
+    for fmt in ("%b %d, %Y, %I:%M %p", "%b %d, %Y"):
+        try:
+            return datetime.strptime(s_clean, fmt), s_clean
+        except Exception:
+            continue
+    # fallback: keep original
+    return None, s_clean
+
+def rows_to_records(driver, county_slug: str, max_parties: int, wait_secs: int, days_back: int):
+    """
+    Reads the table rows and aggregates by Doc Number.
+    """
+    # Column map based on the HTML you posted:
+    # 0 #, 1 image, 2 shielded, 3 Doc Number, 4 Party, 5 Book & Page,
+    # 6 Doc Date, 7 Recorded Date, 8 Doc Type, 9 Assoc Doc, 10 Legal Summary,
+    # 11 Consideration, 12 Additional Party, 13 Pages
+    rows = WebDriverWait(driver, wait_secs).until(
+        EC.presence_of_all_elements_located((By.CSS_SELECTOR, "table[role='table'] tbody tr"))
+    )
+
+    bucket = {}  # key: Doc Number, value: dict record
+    per_doc_parties = defaultdict(list)
+
+    min_doc_date = None
+    if days_back and days_back > 0:
+        min_doc_date = datetime.utcnow().date() - timedelta(days=days_back)
+
+    count = 0
+    for row in rows:
+        try:
+            tds = row.find_elements(By.TAG_NAME, "td")
+            if len(tds) < 14:
+                # unexpected; skip
+                continue
+
+            doc_number = safe_text(tds[3])
+            if not doc_number:
+                continue
+
+            party_cell = tds[4]
+            addl_party_cell = tds[12]
+
+            party_text = extract_party_and_role(party_cell)
+            addl_party_text = extract_party_and_role(addl_party_cell)
+
+            book_page = safe_text(tds[5]) or None
+            doc_date_raw = safe_text(tds[6])
+            recorded_date_raw = safe_text(tds[7])
+            doc_type = safe_text(tds[8])
+            assoc_doc = safe_text(tds[9])
+            legal_summary = safe_text(tds[10])
+            consideration = safe_text(tds[11])
+            pages = safe_text(tds[13])
+
+            # optional filter by days-back using Doc Date
+            dt_doc, _doc_norm = parse_date_mmmd(doc_date_raw)
+            if min_doc_date and dt_doc and (dt_doc.date() < min_doc_date):
+                # skip if older
+                continue
+
+            # Initialize record if first time
+            if doc_number not in bucket:
+                count += 1
+                rec = OrderedDict()
+                rec["id"] = f"{county_slug}-{count}"
+                rec["Doc Number"] = doc_number
+                # Parties filled later after aggregation
+                for i in range(1, max_parties + 1):
+                    rec[f"Party{i}"] = ""
+                rec["Book & Page"] = book_page
+                rec["Doc Date"] = doc_date_raw
+                rec["Recorded Date"] = recorded_date_raw
+                rec["Doc Type"] = doc_type
+                rec["Assoc Doc"] = assoc_doc
+                rec["Legal Summary"] = legal_summary
+                rec["Consideration"] = consideration
+                # Pages numeric if possible
+                try:
+                    rec["Pages"] = int(pages)
+                except Exception:
+                    rec["Pages"] = pages
+                bucket[doc_number] = rec
+
+            # Merge fields that may be blank on first/other rows
+            rec = bucket[doc_number]
+            if not rec.get("Book & Page") and book_page:
+                rec["Book & Page"] = book_page
+            if not rec.get("Doc Date") and doc_date_raw:
+                rec["Doc Date"] = doc_date_raw
+            if not rec.get("Recorded Date") and recorded_date_raw:
+                rec["Recorded Date"] = recorded_date_raw
+            if not rec.get("Doc Type") and doc_type:
+                rec["Doc Type"] = doc_type
+            if not rec.get("Assoc Doc") and assoc_doc:
+                rec["Assoc Doc"] = assoc_doc
+            if not rec.get("Legal Summary") and legal_summary:
+                rec["Legal Summary"] = legal_summary
+            if (isinstance(rec.get("Pages"), str) or not rec.get("Pages")) and pages:
+                try:
+                    rec["Pages"] = int(pages)
+                except Exception:
+                    rec["Pages"] = pages
+
+            # aggregate parties (dedupe, keep order)
+            for p in [party_text, addl_party_text]:
+                p_norm = p.strip()
+                if p_norm and p_norm not in per_doc_parties[doc_number]:
+                    per_doc_parties[doc_number].append(p_norm)
+
+        except Exception as e:
+            log(f"Row parse error: {e}")
+
+    # Fill Party1..PartyN
+    for doc_number, parties in per_doc_parties.items():
+        rec = bucket.get(doc_number)
+        if not rec:
+            continue
+        # keep only unique, cap to max_parties
+        parties = parties[:max_parties]
+        for i, p in enumerate(parties, start=1):
+            rec[f"Party{i}"] = p
+
+    # stable order by id index
+    records = list(bucket.values())
+    # Already assigned ids in increasing count order
+    return records
+
+# --------------- Save ---------------
+
+def ensure_out(out_dir: str):
+    os.makedirs(out_dir, exist_ok=True)
+
+def save_json_csv(records, out_dir: str, county_slug: str):
+    ts = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    json_path = os.path.join(out_dir, f"{county_slug}.json")
+    csv_path = os.path.join(out_dir, f"{county_slug}.csv")
+
+    # JSON
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(records, f, indent=2, ensure_ascii=False)
+
+    # CSV: union headers
+    headers = OrderedDict()
+    for r in records:
+        for k in r.keys():
+            headers[k] = True
+    headers = list(headers.keys())
+
+    with open(csv_path, "w", encoding="utf-8", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=headers)
+        w.writeheader()
+        for r in records:
+            w.writerow(r)
+
+    log(f"Wrote {json_path} and {csv_path}")
+    return json_path, csv_path
+
+# --------------- Main flow ---------------
+
+def main():
+    args = get_args()
+
+    start_time = time.time()
+    if args.hard_timeout and args.hard_timeout > 0:
+        log(f"Hard timeout enabled: {args.hard_timeout}s")
+
+    rescrape_list = parse_indices(args.rescrape_indices)
+    only_counties = parse_list(args.only_counties)
+
+    log(f"Params: headless={args.headless}, out={args.out}, wait={args.wait}, "
+        f"max_parties={args.max_parties}, days_back={args.days_back}, "
+        f"rescrape_indices={rescrape_list}, only_counties={only_counties}, "
+        f"county_slug={args.county_slug}")
+
+    ensure_out(args.out)
+    flow = {
+        "started_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "county": args.county_slug,
+        "rescrape_indices": rescrape_list,
+        "only_counties": only_counties,
+        "steps": []
+    }
+
+    driver = None
+    try:
+        driver = build_driver(args.headless)
+        maybe_login(driver, args.wait)
+        navigate_to_results(driver, args.start_url, args.wait)
+
+        # First pass scrape
+        flow["steps"].append({"event": "first_pass_begin", "ts": datetime.utcnow().isoformat()})
+        records = rows_to_records(
+            driver=driver,
+            county_slug=args.county_slug,
+            max_parties=args.max_parties,
+            wait_secs=args.wait,
+            days_back=args.days_back
+        )
+        flow["steps"].append({"event": "first_pass_records", "count": len(records)})
+
+        # Optional: perform a "rescrape" run (e.g., change page/sort/filter in your app then scrape again)
+        # This is a stub; if your UI requires moving through county indices 1..N, add that navigation here.
+        if rescrape_list:
+            for idx in rescrape_list:
+                flow["steps"].append({"event": "rescrape_begin", "index": idx})
+                # TODO: navigate to the selected county index here if applicable.
+                # After navigation finishes loading, call rows_to_records again and merge/replace logic as needed.
+                more = rows_to_records(
+                    driver=driver,
+                    county_slug=args.county_slug,
+                    max_parties=args.max_parties,
+                    wait_secs=args.wait,
+                    days_back=args.days_back
+                )
+                # Merge: by Doc Number update
+                by_doc = {r["Doc Number"]: r for r in records}
+                for r in more:
+                    by_doc[r["Doc Number"]] = r
+                records = list(by_doc.values())
+                flow["steps"].append({"event": "rescrape_records", "index": idx, "count": len(more)})
+
+        # Save
+        json_path, csv_path = save_json_csv(records, args.out, args.county_slug)
+        flow["finished_ok"] = True
+        flow["records"] = len(records)
+        flow["json_path"] = json_path
+        flow["csv_path"] = csv_path
+
+    except Exception as e:
+        log(f"FATAL: {e}")
+        flow["finished_ok"] = False
+        flow["error"] = repr(e)
+        raise
+    finally:
+        if driver:
+            try:
+                driver.quit()
+            except Exception:
+                pass
+        write_flow_log(flow)
+
+        if args.hard_timeout and args.hard_timeout > 0:
+            elapsed = time.time() - start_time
+            if elapsed > args.hard_timeout:
+                log("Hard timeout reached; exiting.")
+                sys.exit(124)
 
 if __name__ == "__main__":
-    args = parse_args()
-    scraper = Laredo(
-        headless=args.headless,
-        out_dir=args.out,
-        wait_seconds=args.wait,
-        max_parties=args.max_parties,
-        days_back=args.days_back,
-        rescrape_indices=args.rescrape_indices,
-        only_counties=args.only_counties if args.only_counties else None,
-        hard_timeout=args.hard_timeout if args.hard_timeout > 0 else None,
-    )
-    scraper.extract_data()
+    main()
