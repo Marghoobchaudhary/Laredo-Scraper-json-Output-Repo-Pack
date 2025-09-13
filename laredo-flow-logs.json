@@ -1,21 +1,4 @@
 {
   "login_status": "success",
-  "City of St Louis County": {
-    "connected": "failed"
-  },
-  "St Louis County": {
-    "connected": "success",
-    "data_json": "saved",
-    "disconnected": "success"
-  },
-  "St Charles County": {
-    "connected": "failed"
-  },
-  "Jefferson County": {
-    "connected": "success",
-    "data_json": "saved",
-    "disconnected": "success"
-  },
-  "logout": "success",
-  "time_taken_sec": 162.65
+  "time_taken_sec": 57.39
 }
