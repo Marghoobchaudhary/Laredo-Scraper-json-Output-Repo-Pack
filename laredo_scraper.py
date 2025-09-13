@@ -2,12 +2,21 @@
 # -*- coding: utf-8 -*-
 
 """
-Laredo scraper
-- Scrapes the PrimeNG table you shared (Doc Number, Parties, Book & Page, Doc Date, Recorded Date, Doc Type,
-  Assoc Doc, Legal Summary, Consideration, Additional Party, Pages)
-- Aggregates duplicate Doc Numbers into one record and fills Party1..N
-- Robust handling of rescrape indices and optional iframe/table selectors
-- Dumps HTML and screenshot on failure for quick diagnosis
+St. Charles County — Laredo table scraper
+
+- Reads the PrimeNG data table you shared.
+- Dynamically maps columns from <thead><th> text so "Doc Date" and "Recorded Date"
+  are captured reliably even if column order changes.
+- Aggregates duplicate Doc Numbers and fills Party1..N (Party + Additional Party).
+- Outputs <out>/<county_slug>.json and .csv.
+
+USAGE (recommended):
+  python laredo_scraper.py --headless \
+    --start-url "https://<THE_ST_CHARLES_TABLE_URL>" \
+    --out files --wait 30 --max-parties 6 --county-slug st-charles-county
+
+If the table is inside an iframe, also pass: --iframe-css "iframe#resultsFrame"
+You can optionally pass: --table-css "#pn_id_910-table"
 """
 
 import os
@@ -30,7 +39,7 @@ from selenium.common.exceptions import TimeoutException, NoSuchFrameException, W
 LOG_FILE = "laredo.logs"
 FLOW_LOG = "laredo-flow-logs.json"
 
-# ---------- logging ----------
+# ---------------- logging ----------------
 def log(msg: str):
     ts = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
     line = f"[{ts}] {msg}"
@@ -48,46 +57,21 @@ def write_flow_log(data):
     except Exception as e:
         log(f"Failed writing flow log: {e}")
 
-# ---------- args ----------
-def parse_indices(s: str):
-    if not s:
-        return []
-    s = s.strip()
-    if (s.startswith("'") and s.endswith("'")) or (s.startswith('"') and s.endswith('"')):
-        s = s[1:-1]
-    parts = re.split(r"[\s,]+", s.strip())
-    out = []
-    for p in parts:
-        if not p:
-            continue
-        try:
-            out.append(int(p))
-        except ValueError:
-            log(f"Warning: ignoring non-integer rescrape index token: {p!r}")
-    return out
-
-def parse_list(s: str):
-    if not s:
-        return []
-    return [p for p in re.split(r"[\s,]+", s.strip()) if p]
-
+# ---------------- args ----------------
 def get_args():
     ap = argparse.ArgumentParser()
     ap.add_argument("--headless", action="store_true", help="Run headless")
     ap.add_argument("--out", default=os.environ.get("OUT_DIR", "files"), help="Output directory")
     ap.add_argument("--wait", type=int, default=30, help="UI wait seconds")
-    ap.add_argument("--max-parties", type=int, default=6, help="Number of Party fields (Party1..N)")
-    ap.add_argument("--days-back", type=int, default=2, help="Skip Doc Date older than N days (0: disable)")
-    ap.add_argument("--rescrape-indices", default="", help="Space/comma-separated indices for a second pass")
-    ap.add_argument("--only-counties", default="", help="Optional filter: only scrape these county slugs")
-    ap.add_argument("--hard-timeout", type=int, default=0, help="Hard kill after N seconds (0=disabled)")
-    ap.add_argument("--county-slug", default="st-charles-county", help="Slug used in output filenames/ids")
-    ap.add_argument("--start-url", default=os.environ.get("LAREDO_URL", ""), help="Direct URL to results page")
-    ap.add_argument("--iframe-css", default="", help="CSS selector for iframe containing the table")
-    ap.add_argument("--table-css", default="", help="CSS selector for table (overrides auto detection)")
+    ap.add_argument("--max-parties", type=int, default=6, help="How many PartyN fields to output")
+    ap.add_argument("--days-back", type=int, default=0, help="Skip rows with Doc Date older than N days (0=disable)")
+    ap.add_argument("--county-slug", default="st-charles-county", help="Slug for output filenames/ids")
+    ap.add_argument("--start-url", default=os.environ.get("LAREDO_URL", ""), help="Direct URL to St. Charles table")
+    ap.add_argument("--iframe-css", default="", help="CSS for iframe containing the table (if any)")
+    ap.add_argument("--table-css", default="", help="CSS for the table (optional override)")
     return ap.parse_args()
 
-# ---------- driver ----------
+# ---------------- driver ----------------
 def build_driver(headless: bool):
     opts = ChromeOptions()
     if headless:
@@ -106,115 +90,102 @@ def build_driver(headless: bool):
     driver.set_page_load_timeout(180)
     return driver
 
-# ---------- login (stub) ----------
-def maybe_login(driver, wait_secs: int):
-    if not (os.environ.get("LAREDO_USERNAME") and os.environ.get("LAREDO_PASSWORD")):
-        log("No LAREDO_USERNAME/PASSWORD in env — skipping login.")
-        return
-    try:
-        log("Login stub: implement if needed (skipped).")
-    except Exception as e:
-        log(f"Login skipped/failed: {e}")
-
-# ---------- helpers ----------
-def _dump_debug_artifacts(driver):
+# ---------------- debug helpers ----------------
+def _dump_debug(driver):
     try:
         with open("laredo_page.html", "w", encoding="utf-8", errors="ignore") as f:
             f.write(driver.page_source)
-        log("Saved current page HTML -> laredo_page.html")
-    except Exception as e:
-        log(f"Failed to save HTML: {e}")
-    try:
         driver.save_screenshot("laredo_page.png")
-        log("Saved screenshot -> laredo_page.png")
+        log("Saved laredo_page.html and laredo_page.png")
     except Exception as e:
-        log(f"Failed to save screenshot: {e}")
+        log(f"Debug dump failed: {e}")
 
-def _switch_into_iframe(driver, iframe_css: str):
+def _switch_iframe(driver, iframe_css: str):
     if not iframe_css:
         return
     try:
-        frame = WebDriverWait(driver, 10).until(
+        frame = WebDriverWait(driver, 12).until(
             EC.presence_of_element_located((By.CSS_SELECTOR, iframe_css))
         )
         driver.switch_to.frame(frame)
         log(f"Switched into iframe: {iframe_css}")
     except (TimeoutException, NoSuchFrameException) as e:
-        log(f"WARNING: iframe not found ({iframe_css}). Continuing in main context. ({e})")
+        log(f"WARNING: iframe not found ({iframe_css}). Continuing in main context. {e}")
 
-def _any_present(driver, selectors):
-    for sel in selectors:
-        if not sel:
-            continue
-        try:
-            if driver.find_elements(By.CSS_SELECTOR, sel):
-                return True
-        except Exception:
-            pass
-    return False
-
-def _scroll_breath(driver):
-    try:
-        driver.execute_script("window.scrollTo(0, 0);")
-        time.sleep(0.3)
-        driver.execute_script("window.scrollTo(0, document.body.scrollHeight/2);")
-        time.sleep(0.3)
-        driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-    except WebDriverException:
-        pass
-
-def _robust_wait_for_table(driver, table_css: str, total_wait_s: int):
-    # Your table id seen in the dump: #pn_id_910-table
-    fallbacks = [
-        table_css or "",                            # explicit override takes priority
-        "table[role='table'] tbody tr",             # generic
-        "table.p-datatable-table tbody tr",         # PrimeNG class
-        "#pn_id_910-table tbody tr",                # explicit id from sample
-        "table[role='table']"                       # at least the table exists
+def _robust_wait_for_table(driver, table_css: str, wait_s: int):
+    selectors = [
+        table_css or "",
+        "table[role='table']",
+        "table.p-datatable-table",
+        "#pn_id_910-table",
     ]
-    deadline = time.time() + total_wait_s
-    last_err = None
-    while time.time() < deadline:
-        try:
-            if _any_present(driver, fallbacks):
-                return True
-        except Exception as e:
-            last_err = e
+    end = time.time() + max(wait_s, 15)
+    while time.time() < end:
+        for sel in selectors:
+            if not sel:
+                continue
+            try:
+                if driver.find_elements(By.CSS_SELECTOR, f"{sel} thead th"):
+                    if driver.find_elements(By.CSS_SELECTOR, f"{sel} tbody tr"):
+                        return sel  # return the working base selector
+            except Exception:
+                pass
         time.sleep(0.8)
-        _scroll_breath(driver)
-    if last_err:
-        log(f"Last wait error: {last_err!r}")
-    return False
+    return ""
 
-def navigate_to_results(driver, start_url: str, iframe_css: str, table_css: str, wait_secs: int):
-    if not start_url:
-        log("No --start-url provided; trying current page context.")
-    else:
+def navigate(driver, start_url: str, iframe_css: str, table_css: str, wait_s: int):
+    if start_url:
         log(f"Opening start URL: {start_url}")
         driver.get(start_url)
-
+    else:
+        log("No --start-url provided; using current page.")
     time.sleep(2)
-    _switch_into_iframe(driver, iframe_css)
+    _switch_iframe(driver, iframe_css)
 
-    if not _robust_wait_for_table(driver, table_css, max(wait_secs, 15)):
-        log("Table not found on first try; reloading once…")
+    base_sel = _robust_wait_for_table(driver, table_css, wait_s)
+    if not base_sel:
+        log("Table not found; refreshing once…")
         try:
             driver.refresh()
             time.sleep(2)
-            _switch_into_iframe(driver, iframe_css)
+            _switch_iframe(driver, iframe_css)
+            base_sel = _robust_wait_for_table(driver, table_css, wait_s)
         except Exception as e:
             log(f"Refresh failed: {e}")
-        if not _robust_wait_for_table(driver, table_css, max(wait_secs, 15)):
-            _dump_debug_artifacts(driver)
-            raise TimeoutException("Results table not found after robust wait (+ reload).")
 
+    if not base_sel:
+        _dump_debug(driver)
+        raise TimeoutException("Results table not found after robust wait (+ reload).")
+    return base_sel
+
+# ---------------- scraping ----------------
 def safe_text(el):
     try:
         return el.text.strip()
     except Exception:
         return ""
 
+def normalize_header(text: str) -> str:
+    t = (text or "").strip().lower()
+    t = re.sub(r"\s+", " ", t)
+    return t
+
+def map_columns(table_elem):
+    """
+    Read header <th> text and return a mapping {normalized_header: column_index}.
+    """
+    headers = table_elem.find_elements(By.CSS_SELECTOR, "thead th")
+    mapping = {}
+    for idx, th in enumerate(headers):
+        label = normalize_header(th.text)
+        if not label:
+            # some columns (index/images/shielded) may be blank; keep them mapped by index if needed
+            continue
+        mapping[label] = idx
+    return mapping
+
 def extract_party_and_role(td_elem):
+    # Name in first span; role chip includes GRANTOR/GRANTEE
     name = ""
     role = ""
     try:
@@ -223,15 +194,18 @@ def extract_party_and_role(td_elem):
         name = safe_text(td_elem)
     try:
         chip = td_elem.find_element(By.CSS_SELECTOR, ".party-chip")
-        role_raw = safe_text(chip)
-        m = re.search(r"\b(GRANTOR|GRANTEE)\b", role_raw, re.IGNORECASE)
+        m = re.search(r"\b(GRANTOR|GRANTEE)\b", chip.text, re.IGNORECASE)
         if m:
             role = m.group(1).upper()
     except Exception:
         role = ""
     return f"{name} ({role})" if name and role else name
 
-def parse_date_mmmd(s: str):
+def parse_date_raw(s: str):
+    """
+    We keep raw strings for JSON, but this helper can validate if needed.
+    Accepts 'Sep 10, 2025' or 'Sep 12, 2025, 8:27 AM'
+    """
     s = (s or "").strip()
     if not s:
         return None, ""
@@ -240,34 +214,54 @@ def parse_date_mmmd(s: str):
             return datetime.strptime(s, fmt), s
         except Exception:
             continue
-    return None, s
+    return None, s  # return original string even if parse failed
 
-def _find_rows(driver, table_css: str):
-    rows = []
-    # Use either explicit table selector or known fallbacks
-    if table_css:
-        # If a table selector was provided, try to hit its rows
-        if "tbody" in table_css:
-            rows = driver.find_elements(By.CSS_SELECTOR, table_css)
-        else:
-            rows = driver.find_elements(By.CSS_SELECTOR, f"{table_css} tbody tr")
-    if not rows:
-        rows = driver.find_elements(By.CSS_SELECTOR, "table[role='table'] tbody tr")
-    if not rows:
-        rows = driver.find_elements(By.CSS_SELECTOR, "table.p-datatable-table tbody tr")
-    if not rows:
-        rows = driver.find_elements(By.CSS_SELECTOR, "#pn_id_910-table tbody tr")
-    return rows
+def rows_to_records(driver, base_sel: str, county_slug: str, max_parties: int, wait_s: int, days_back: int):
+    # Locate the concrete table element for consistent scoping
+    table = driver.find_element(By.CSS_SELECTOR, base_sel)
+    colmap = map_columns(table)
 
-def rows_to_records(driver, county_slug: str, max_parties: int, wait_secs: int, days_back: int, table_css: str):
-    _robust_wait_for_table(driver, table_css, max(wait_secs, 15))
-    rows = _find_rows(driver, table_css)
+    # Figure out required columns by fuzzy header names
+    # (normalize_header() is used, so match lowercase)
+    want = {
+        "doc number": None,
+        "party": None,
+        "book & page": None,
+        "doc date": None,
+        "recorded date": None,
+        "doc type": None,
+        "assoc doc": None,
+        "legal summary": None,
+        "consideration": None,
+        "additional party": None,
+        "pages": None,
+    }
+    for key in list(want.keys()):
+        # find the first header containing the key (exact or startswith)
+        exact = colmap.get(key)
+        if exact is not None:
+            want[key] = exact
+            continue
+        # fallback: look for any header that contains key as substring
+        for htext, idx in colmap.items():
+            if key in htext:
+                want[key] = idx
+                break
 
-    # In case of virtual scroll showing only a subset, try a little scroll to enforce rendering
+    missing = [k for k, v in want.items() if v is None and k in ("doc number", "doc date", "recorded date")]
+    if missing:
+        log(f"WARNING: missing critical header(s): {missing} — dates may not be captured.")
+
+    # Collect all rows within this table
+    rows = table.find_elements(By.CSS_SELECTOR, "tbody tr")
     if not rows:
-        _scroll_breath(driver)
-        time.sleep(1)
-        rows = _find_rows(driver, table_css)
+        # try a gentle breathe scroll in case of virtual rendering
+        try:
+            driver.execute_script("arguments[0].scrollIntoView(true);", table)
+            time.sleep(1)
+        except Exception:
+            pass
+        rows = table.find_elements(By.CSS_SELECTOR, "tbody tr")
 
     bucket = {}
     per_doc_parties = defaultdict(list)
@@ -280,30 +274,36 @@ def rows_to_records(driver, county_slug: str, max_parties: int, wait_secs: int, 
     for row in rows:
         try:
             tds = row.find_elements(By.TAG_NAME, "td")
-            if len(tds) < 14:
+            if not tds:
                 continue
 
-            doc_number = safe_text(tds[3])
+            def cell(idx):
+                return safe_text(tds[idx]) if idx is not None and idx < len(tds) else ""
+
+            doc_number = cell(want["doc number"])
             if not doc_number:
                 continue
 
-            party_cell = tds[4]
-            addl_party_cell = tds[12]
+            party_main = ""
+            if want["party"] is not None and want["party"] < len(tds):
+                party_main = extract_party_and_role(tds[want["party"]])
 
-            party_text = extract_party_and_role(party_cell)
-            addl_party_text = extract_party_and_role(addl_party_cell)
+            party_addl = ""
+            if want["additional party"] is not None and want["additional party"] < len(tds):
+                party_addl = extract_party_and_role(tds[want["additional party"]])
 
-            book_page = safe_text(tds[5]) or None
-            doc_date_raw = safe_text(tds[6])          # Doc Date
-            recorded_date_raw = safe_text(tds[7])     # Recorded Date
-            doc_type = safe_text(tds[8])
-            assoc_doc = safe_text(tds[9])
-            legal_summary = safe_text(tds[10])
-            consideration = safe_text(tds[11])
-            pages = safe_text(tds[13])
+            book_page = cell(want["book & page"]) or None
+            doc_date_raw = cell(want["doc date"])
+            recorded_date_raw = cell(want["recorded date"])
+            doc_type = cell(want["doc type"])
+            assoc_doc = cell(want["assoc doc"])
+            legal_summary = cell(want["legal summary"])
+            consideration = cell(want["consideration"])
+            pages_raw = cell(want["pages"])
 
-            dt_doc, _ = parse_date_mmmd(doc_date_raw)
-            if min_doc_date and dt_doc and (dt_doc.date() < min_doc_date):
+            # Optional filter by days-back using Doc Date (if parseable)
+            dt_doc, _ = parse_date_raw(doc_date_raw)
+            if min_doc_date and dt_doc and dt_doc.date() < min_doc_date:
                 continue
 
             if doc_number not in bucket:
@@ -314,45 +314,48 @@ def rows_to_records(driver, county_slug: str, max_parties: int, wait_secs: int, 
                 for i in range(1, max_parties + 1):
                     rec[f"Party{i}"] = ""
                 rec["Book & Page"] = book_page
-                rec["Doc Date"] = doc_date_raw
-                rec["Recorded Date"] = recorded_date_raw
+                rec["Doc Date"] = doc_date_raw              # <-- FROM TABLE
+                rec["Recorded Date"] = recorded_date_raw     # <-- FROM TABLE
                 rec["Doc Type"] = doc_type
                 rec["Assoc Doc"] = assoc_doc
                 rec["Legal Summary"] = legal_summary
                 rec["Consideration"] = consideration
                 try:
-                    rec["Pages"] = int(pages)
+                    rec["Pages"] = int(pages_raw)
                 except Exception:
-                    rec["Pages"] = pages
+                    rec["Pages"] = pages_raw
                 bucket[doc_number] = rec
 
             rec = bucket[doc_number]
-            if not rec.get("Book & Page") and book_page:
+            # Enrich/merge if blanks
+            if (not rec.get("Book & Page")) and book_page:
                 rec["Book & Page"] = book_page
-            if not rec.get("Doc Date") and doc_date_raw:
+            if (not rec.get("Doc Date")) and doc_date_raw:
                 rec["Doc Date"] = doc_date_raw
-            if not rec.get("Recorded Date") and recorded_date_raw:
+            if (not rec.get("Recorded Date")) and recorded_date_raw:
                 rec["Recorded Date"] = recorded_date_raw
-            if not rec.get("Doc Type") and doc_type:
+            if (not rec.get("Doc Type")) and doc_type:
                 rec["Doc Type"] = doc_type
-            if not rec.get("Assoc Doc") and assoc_doc:
+            if (not rec.get("Assoc Doc")) and assoc_doc:
                 rec["Assoc Doc"] = assoc_doc
-            if not rec.get("Legal Summary") and legal_summary:
+            if (not rec.get("Legal Summary")) and legal_summary:
                 rec["Legal Summary"] = legal_summary
-            if (isinstance(rec.get("Pages"), str) or not rec.get("Pages")) and pages:
+            if (isinstance(rec.get("Pages"), str) or not rec.get("Pages")) and pages_raw:
                 try:
-                    rec["Pages"] = int(pages)
+                    rec["Pages"] = int(pages_raw)
                 except Exception:
-                    rec["Pages"] = pages
+                    rec["Pages"] = pages_raw
 
-            for p in [party_text, addl_party_text]:
-                p_norm = p.strip()
-                if p_norm and p_norm not in per_doc_parties[doc_number]:
-                    per_doc_parties[doc_number].append(p_norm)
+            # Parties
+            for p in (party_main, party_addl):
+                p = (p or "").strip()
+                if p and p not in per_doc_parties[doc_number]:
+                    per_doc_parties[doc_number].append(p)
 
         except Exception as e:
             log(f"Row parse error: {e}")
 
+    # Fill Party1..N
     for doc_number, parties in per_doc_parties.items():
         rec = bucket.get(doc_number)
         if not rec:
@@ -362,7 +365,7 @@ def rows_to_records(driver, county_slug: str, max_parties: int, wait_secs: int, 
 
     return list(bucket.values())
 
-# ---------- output ----------
+# ---------------- output ----------------
 def ensure_out(out_dir: str):
     os.makedirs(out_dir, exist_ok=True)
 
@@ -388,67 +391,37 @@ def save_json_csv(records, out_dir: str, county_slug: str):
     log(f"Wrote {json_path} and {csv_path}")
     return json_path, csv_path
 
-# ---------- main ----------
+# ---------------- main ----------------
 def main():
     args = get_args()
 
-    start_time = time.time()
-    if args.hard_timeout and args.hard_timeout > 0:
-        log(f"Hard timeout enabled: {args.hard_timeout}s")
-
-    rescrape_list = parse_indices(args.rescrape_indices)
-    only_counties = parse_list(args.only_counties)
-
     log(
         f"Params: headless={args.headless}, out={args.out}, wait={args.wait}, "
-        f"max_parties={args.max_parties}, days_back={args.days_back}, "
-        f"rescrape_indices={rescrape_list}, only_counties={only_counties}, "
-        f"county_slug={args.county_slug}"
+        f"max_parties={args.max_parties}, days_back={args.days_back}, county_slug={args.county_slug}"
     )
 
     ensure_out(args.out)
     flow = {
         "started_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
         "county": args.county_slug,
-        "rescrape_indices": rescrape_list,
-        "only_counties": only_counties,
         "steps": []
     }
 
     driver = None
     try:
         driver = build_driver(args.headless)
-        maybe_login(driver, args.wait)
-        navigate_to_results(driver, args.start_url, args.iframe_css, args.table_css, args.wait)
+        base_sel = navigate(driver, args.start_url, args.iframe_css, args.table_css, args.wait)
 
-        flow["steps"].append({"event": "first_pass_begin", "ts": datetime.utcnow().isoformat()})
+        flow["steps"].append({"event": "scrape_begin", "ts": datetime.utcnow().isoformat()})
         records = rows_to_records(
             driver=driver,
+            base_sel=base_sel,
             county_slug=args.county_slug,
             max_parties=args.max_parties,
-            wait_secs=args.wait,
+            wait_s=args.wait,
             days_back=args.days_back,
-            table_css=args.table_css,
         )
-        flow["steps"].append({"event": "first_pass_records", "count": len(records)})
-
-        if rescrape_list:
-            for idx in rescrape_list:
-                flow["steps"].append({"event": "rescrape_begin", "index": idx})
-                # TODO: navigate/select different county/index if your UI requires.
-                more = rows_to_records(
-                    driver=driver,
-                    county_slug=args.county_slug,
-                    max_parties=args.max_parties,
-                    wait_secs=args.wait,
-                    days_back=args.days_back,
-                    table_css=args.table_css,
-                )
-                by_doc = {r["Doc Number"]: r for r in records}
-                for r in more:
-                    by_doc[r["Doc Number"]] = r
-                records = list(by_doc.values())
-                flow["steps"].append({"event": "rescrape_records", "index": idx, "count": len(more)})
+        flow["steps"].append({"event": "records", "count": len(records)})
 
         json_path, csv_path = save_json_csv(records, args.out, args.county_slug)
         flow["finished_ok"] = True
@@ -459,7 +432,7 @@ def main():
     except Exception as e:
         log(f"FATAL: {e}")
         if driver:
-            _dump_debug_artifacts(driver)
+            _dump_debug(driver)
         flow["finished_ok"] = False
         flow["error"] = repr(e)
         raise
@@ -470,12 +443,6 @@ def main():
             except Exception:
                 pass
         write_flow_log(flow)
-
-        if args.hard_timeout and args.hard_timeout > 0:
-            elapsed = time.time() - start_time
-            if elapsed > args.hard_timeout:
-                log("Hard timeout reached; exiting.")
-                sys.exit(124)
 
 if __name__ == "__main__":
     main()
