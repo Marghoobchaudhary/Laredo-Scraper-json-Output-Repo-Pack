@@ -25,7 +25,7 @@ on:
         required: false
 
 permissions:
-  contents: write  # needed to push JSON files back to the repo
+  contents: write
 
 env:
   OUT_DIR: files
@@ -42,6 +42,17 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+
+      # NEW: Ensure Google Chrome is available for Selenium
+      - name: Install Google Chrome
+        uses: browser-actions/setup-chrome@v1
+        with:
+          chrome-version: stable
+
+      - name: Verify Chrome
+        run: |
+          which google-chrome || true
+          google-chrome --version || true
 
       - name: Install dependencies
         run: |
@@ -77,26 +88,38 @@ jobs:
             --rescrape-indices ${{ inputs.rescrape_indices }}
 
       - name: List output files
+        if: always()
         run: |
           echo "OUT_DIR=${{ env.OUT_DIR }}"
           ls -la "${{ env.OUT_DIR }}" || true
+          ls -la || true
+
+      # NEW: Upload debug artifacts whether the run succeeds or fails
+      - name: Upload debug artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scrape-debug
+          path: |
+            ${{ env.OUT_DIR }}/*.png
+            ${{ env.OUT_DIR }}/*.html
+            ${{ env.OUT_DIR }}/_debug_last_search.json
+            laredo-flow-logs.json
+            laredo.logs
+          if-no-files-found: warn
 
       - name: Commit & push JSON results
         if: ${{ success() }}
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          # Add only the files we expect to change
           git add ${{ env.OUT_DIR }}/*.json || true
           git add ${{ env.OUT_DIR }}/_debug_last_search.json || true
           git add laredo-flow-logs.json || true
           git add laredo.logs || true
-
-          # Commit if there are staged changes
           if ! git diff --cached --quiet; then
             git commit -m "Update scraped JSON ($(date -u +'%Y-%m-%dT%H:%M:%SZ'))"
-            git push
+            git push || echo "Push failed (branch protection or no changes upstream)."
           else
             echo "No changes to commit."
           fi
