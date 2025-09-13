@@ -20,10 +20,11 @@ from selenium.common.exceptions import StaleElementReferenceException
 class LaredoScraper:
     """
     Scrapes laredoanywhere.com, intercepts search API results,
-    enriches with doc details, and writes JSON files.
+    enriches with doc details, and writes JSON files (always writes a per-county file).
+    Also drops debug artifacts for troubleshooting in CI.
     """
 
-    def __init__(self, out_dir="files", headless=True, wait_seconds=10, max_parties=6):
+    def __init__(self, out_dir="files", headless=True, wait_seconds=30, max_parties=6):
         load_dotenv()
         self.username = os.getenv("LAREDO_USERNAME", "")
         self.password = os.getenv("LAREDO_PASSWORD", "")
@@ -43,10 +44,14 @@ class LaredoScraper:
         chrome_options.add_argument("--disable-gpu")
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
+        chrome_options.add_argument("--window-size=1600,1000")
+        chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+        chrome_options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                                    "Chrome/120.0.0.0 Safari/537.36")
         chrome_options.set_capability("goog:loggingPrefs", {"performance": "ALL"})
 
         self.driver = webdriver.Chrome(options=chrome_options)
-        self.driver.maximize_window()
         self.driver.execute_cdp_cmd("Network.enable", {})
 
         self.wait = WebDriverWait(self.driver, self.WAIT_DURATION)
@@ -58,6 +63,21 @@ class LaredoScraper:
         self.combined_records_all = []
 
     # ---------- Utility Methods ----------
+    def _save_screenshot(self, name: str):
+        try:
+            path = os.path.join(self.OUT_DIR, f"{name}.png")
+            self.driver.save_screenshot(path)
+        except Exception:
+            pass
+
+    def _save_html(self, name: str):
+        try:
+            path = os.path.join(self.OUT_DIR, f"{name}.html")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(self.driver.page_source)
+        except Exception:
+            pass
+
     def _write_flow_logs(self):
         try:
             with open("laredo-flow-logs.json", "w", encoding="utf-8") as f:
@@ -68,12 +88,12 @@ class LaredoScraper:
     def _write_log(self, msg):
         try:
             with open("laredo.logs", "a", encoding="utf-8") as f:
-                f.write(str(msg) + "\n\n")
+                f.write(str(msg) + "\n")
         except Exception:
             pass
 
     def _wait_for(self, xpath, multiple=False):
-        for _ in range(5):
+        for _ in range(8):
             try:
                 if multiple:
                     return self.wait.until(
@@ -127,6 +147,14 @@ class LaredoScraper:
                     self._write_log(f"Error parsing log entry: {ex}")
         except Exception as e:
             self._write_log(f"Error intercepting: {e}")
+
+        # Always save a raw copy for debugging
+        try:
+            with open(os.path.join(self.OUT_DIR, "_debug_last_search.json"), "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
         return data
 
     # ---------- Page flows ----------
@@ -135,18 +163,24 @@ class LaredoScraper:
             self.driver.get("https://www.laredoanywhere.com/")
             u = self._wait_for("//input[@id='username']")
             if not u:
+                self._save_screenshot("debug_login_missing_username")
+                self._save_html("debug_login_missing_username")
                 return False
             u.send_keys(self.username)
             p = self._wait_for("//input[@id='password']")
             p.send_keys(self.password)
             btn = self._wait_for("//button")
             btn.click()
-            time.sleep(8)
+            time.sleep(10)
             ok = self._wait_for("//div[contains(@class, 'button-wrapper')]")
+            self._save_screenshot("debug_login")
+            self._save_html("debug_login")
             self.flow_log["login_status"] = "success" if ok else "failed"
             return ok is not None
         except Exception as e:
             self._write_log(f"Login error: {e}")
+            self._save_screenshot("debug_login_error")
+            self._save_html("debug_login_error")
             self.flow_log["login_status"] = "failed"
             return False
 
@@ -158,17 +192,19 @@ class LaredoScraper:
         try:
             counties = self._counties()
             county = counties[idx]
+            self.actions.move_to_element(county).perform()
+            self._save_screenshot(f"debug_county_{idx}_hover")
 
             for _ in range(3):
                 try:
                     time.sleep(2)
-                    self.actions.move_to_element(county).perform()
                     county.click()
                     disconnect = self.wait.until(
                         EC.visibility_of_element_located((By.XPATH, "//button[@type='button']"))
                     )
                     if disconnect.text.strip() == "Disconnect":
                         self.flow_log[name] = {"connected": "success"}
+                        self._save_screenshot(f"debug_county_{idx}_connected")
                         return True
                 except StaleElementReferenceException:
                     counties = self._counties()
@@ -177,6 +213,7 @@ class LaredoScraper:
         except Exception as e:
             self._write_log(f"Connect county error: {e}")
             self.flow_log.setdefault(name, {})["connected"] = "failed"
+            self._save_screenshot(f"debug_county_{idx}_connect_error")
             return False
 
     def _close_popup(self):
@@ -237,6 +274,11 @@ class LaredoScraper:
                     (By.XPATH, "//input[contains(@class, 'p-dropdown-filter')]")
                 )
             )
+            # clear any existing text
+            try:
+                search.clear()
+            except Exception:
+                pass
 
             if second_pass:
                 search.send_keys("RESOLUTION")
@@ -255,7 +297,9 @@ class LaredoScraper:
                 EC.visibility_of_element_located((By.XPATH, "//button[contains(@class,'run-btn')]"))
             )
             run_btn.click()
-            time.sleep(6)
+            time.sleep(10)
+            self._save_screenshot("debug_after_search")
+            self._save_html("debug_after_search")
         except Exception as e:
             self._write_log(f"Fill form error: {e}")
 
@@ -307,8 +351,14 @@ class LaredoScraper:
 
     def _doc_detail(self, auth_token, doc_id):
         details = {"addresses": [], "parcels": []}
+        if not doc_id:
+            return details
         try:
-            headers = {"Authorization": auth_token, "Content-Type": "application/json"}
+            headers = {
+                "Authorization": auth_token,
+                "Content-Type": "application/json",
+                "Accept": "application/json, text/plain, */*",
+            }
             resp = requests.post(
                 "https://www.laredoanywhere.com/LaredoAnywhere/LaredoAnywhere.WebService/api/docDetail",
                 headers=headers,
@@ -353,7 +403,8 @@ class LaredoScraper:
                 for i, v in enumerate(vals[: self.max_parties], 1):
                     rec[f"Party{i}"] = v
             else:
-                seq = (linked[0].get(key, []) or []) + [""] * (max_n - len(linked[0].get(key, [])))
+                seq0 = linked[0].get(key, []) or []
+                seq = seq0 + [""] * (max_n - len(seq0))
                 label = "Address" if key == "addresses" else "Parcel"
                 for i, v in enumerate(seq[:max_n], 1):
                     rec[f"{label}{i}"] = v
@@ -387,7 +438,14 @@ class LaredoScraper:
                 return
 
             counties = self._counties()
-            idx, total = 0, len(counties)
+            if not counties:
+                self._write_log("No counties found on the page.")
+                self._save_screenshot("debug_no_counties")
+                self._save_html("debug_no_counties")
+            total = len(counties)
+            print("Total Counties:", total)
+
+            idx = 0
             scrape_count = {}
 
             while idx < total:
@@ -397,25 +455,31 @@ class LaredoScraper:
                     )[idx].text
                     slug = slugify(county_name)
                     print(f"Scraping {county_name}")
+
                     second = scrape_count.get(idx, 0) == 1 and idx in rescrape_indices
 
                     if self._connect_county(county_name, idx):
                         self._close_popup()
                         self._fill_form(county_name, second_pass=second)
                         intercepted = self._intercept_after_search()
-                        docs = intercepted.get("docs_list", [])
+                        docs = intercepted.get("docs_list", []) or []
                         token = intercepted.get("auth_token", "")
 
+                        print(f"Intercepted docs: {len(docs)}")
                         cleaned = self._clean_results(slug, docs)
-                        if cleaned:
-                            grouped = self._group_by_doc_number(cleaned)
-                            ids = self._id_map(docs)
-                            combined = self._combine_records(token, ids, grouped)
-                            if combined:
-                                name = f"{slug}_resolution" if second else slug
-                                self._write_json(combined, name)
-                                self.combined_records_all.extend(combined)
-                                self.flow_log.setdefault(county_name, {})["data_json"] = "saved"
+                        grouped = self._group_by_doc_number(cleaned)
+                        ids = self._id_map(docs)
+                        combined = self._combine_records(token, ids, grouped) if cleaned else []
+
+                        # Always write a per-county file (even if empty)
+                        name = f"{slug}_resolution" if second else slug
+                        self._write_json(combined, name)
+                        if combined:
+                            self.combined_records_all.extend(combined)
+                            self.flow_log.setdefault(county_name, {})["data_json"] = "saved"
+                        else:
+                            self.flow_log.setdefault(county_name, {})["data_json"] = "empty"
+
                         self._disconnect(county_name)
 
                     scrape_count[idx] = scrape_count.get(idx, 0) + 1
@@ -423,14 +487,16 @@ class LaredoScraper:
                         print(f"Re-scraping {county_name} for second pass")
                         continue
                     idx += 1
+
                 except Exception as e:
                     self._write_log(f"Iterate counties error: {e}")
                     idx += 1
+
                 counties = self._counties()
                 total = len(counties)
 
-            if self.combined_records_all:
-                self._write_json(self.combined_records_all, "all_counties")
+            # Combined file (even if empty)
+            self._write_json(self.combined_records_all, "all_counties")
 
             self._logout()
             self.driver.quit()
@@ -448,7 +514,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Laredo scraper -> JSON")
     parser.add_argument("--out", default="files", help="Output directory")
     parser.add_argument("--headless", action="store_true", help="Run headless")
-    parser.add_argument("--wait", type=int, default=12, help="Wait seconds for UI")
+    parser.add_argument("--wait", type=int, default=30, help="Wait seconds for UI")
     parser.add_argument("--max-parties", type=int, default=6)
     parser.add_argument(
         "--rescrape-indices", nargs="*", type=int, default=[1, 2], help="County indices to scrape twice"
