@@ -1,0 +1,45 @@
+Connect county error: Message: 
+
+Fill form error: Message: element click intercepted: Element <p-dropdown _ngcontent-ng-c3739192273="" arialabel="Document type" scrollheight="350px" filterby="name" optionlabel="name" formcontrolname="selectedDocumentType" placeholder="Select a type" class="p-element p-inputwrapper ng-tns-c3739192273-37 ng-untouched ng-pristine ng-valid">...</p-dropdown> is not clickable at point (1017, 291). Other element would receive the click: <div _ngcontent-ng-c3739192273="" class="input-with-label-container ng-tns-c3739192273-37">...</div>
+  (Session info: chrome=140.0.7339.80)
+Stacktrace:
+#0 0x556efff7b94a <unknown>
+#1 0x556eff9f08a0 <unknown>
+#2 0x556effa493bc <unknown>
+#3 0x556effa4721b <unknown>
+#4 0x556effa448c2 <unknown>
+#5 0x556effa43fa5 <unknown>
+#6 0x556effa3678b <unknown>
+#7 0x556effa68032 <unknown>
+#8 0x556effa36107 <unknown>
+#9 0x556effa681fe <unknown>
+#10 0x556effa8dc23 <unknown>
+#11 0x556effa67e03 <unknown>
+#12 0x556effa34968 <unknown>
+#13 0x556effa355e1 <unknown>
+#14 0x556efff3f548 <unknown>
+#15 0x556efff43272 <unknown>
+#16 0x556efff26313 <unknown>
+#17 0x556efff43dc5 <unknown>
+#18 0x556efff0b49f <unknown>
+#19 0x556efff68158 <unknown>
+#20 0x556efff68332 <unknown>
+#21 0x556efff7aa53 <unknown>
+#22 0x7ffa36e9caa4 <unknown>
+#23 0x7ffa36f29c3c <unknown>
+
+Doc detail error: 'NoneType' object has no attribute 'get'
+Doc detail error: 'NoneType' object has no attribute 'get'
+Doc detail error: 'NoneType' object has no attribute 'get'
+Doc detail error: 'NoneType' object has no attribute 'get'
+Doc detail error: 'NoneType' object has no attribute 'get'
+Doc detail error: 'NoneType' object has no attribute 'get'
+Doc detail error: 'NoneType' object has no attribute 'get'
+Doc detail error: 'NoneType' object has no attribute 'get'
+Doc detail error: 'NoneType' object has no attribute 'get'
+Doc detail error: 'NoneType' object has no attribute 'get'
+Doc detail error: 'NoneType' object has no attribute 'get'
+Doc detail error: 'NoneType' object has no attribute 'get'
+Doc detail error: 'NoneType' object has no attribute 'get'
+Doc detail error: 'NoneType' object has no attribute 'get'
+Doc detail error: 'NoneType' object has no attribute 'get'

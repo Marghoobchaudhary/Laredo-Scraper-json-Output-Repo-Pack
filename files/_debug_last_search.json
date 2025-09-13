@@ -1,0 +1,1157 @@
+{
+  "docs_list": [
+    {
+      "searchDocId": 2170950,
+      "docNo": 8306384,
+      "userDocNo": "2025R-023313",
+      "docType": "APPOINTMENT",
+      "docTypeCode": "APPOINT",
+      "docDate": "2025-09-04",
+      "docRecordedDateOnly": null,
+      "docRecordedTimeOnly": null,
+      "docRecordedDateTime": [
+        "2025-09-12",
+        "09:38:47.74"
+      ],
+      "refNo": "",
+      "bookPage": null,
+      "book": null,
+      "page": null,
+      "consideration": 0.0,
+      "legalSummary": "Sub: HILLANDALE  9-41 ",
+      "imageExists": true,
+      "docStatus": "A",
+      "partyOne": "MILLSAP AND SINGER PC",
+      "partyOneType": "GRANTEE",
+      "partyTwo": "FOX JEFFEREY ",
+      "partyTwoType": "GRANTOR",
+      "pages": 2,
+      "assocDocSummary": "2010R-018818 ",
+      "notes": null,
+      "associatedDocumentList": [
+        {
+          "id": 1706887,
+          "searchDocId": 1353246,
+          "name": "2010R-018818",
+          "imageExists": true,
+          "numberOfPages": 16,
+          "inRepository": true,
+          "documentType": "DEED OF TRUST"
+        }
+      ],
+      "legalList": [
+        {
+          "id": 1690939,
+          "legalType": "S",
+          "description": "HILLANDALE  9-41    ",
+          "notes": "BOOK: 0009 PAGE: 0041\r\nCABINET: A SLIDE: 198\r\n",
+          "portion": null,
+          "propertyNotes": null,
+          "gisParcelStringUrl": null
+        }
+      ],
+      "lawPartyList": [
+        {
+          "id": 5978427,
+          "partyTypeId": 1,
+          "partyTypeDescription": "GRANTOR",
+          "name": null,
+          "additionalName": "FOX JEFFEREY ",
+          "middleName": null,
+          "fullName": "FOX JEFFEREY "
+        },
+        {
+          "id": 5978428,
+          "partyTypeId": 1,
+          "partyTypeDescription": "GRANTOR",
+          "name": null,
+          "additionalName": "FREEDOM MORTGAGE CORP ",
+          "middleName": null,
+          "fullName": "FREEDOM MORTGAGE CORP "
+        },
+        {
+          "id": 5978429,
+          "partyTypeId": 2,
+          "partyTypeDescription": "GRANTEE",
+          "name": null,
+          "additionalName": "MILLSAP AND SINGER PC",
+          "middleName": null,
+          "fullName": "MILLSAP AND SINGER PC"
+        }
+      ],
+      "returnTo": {
+        "id": 79516,
+        "address1": "612 SPIRIT DR",
+        "address2": null,
+        "address3": "ST. LOUIS, MO  63005",
+        "fullAddress": "MILLSAP AND SINGER, P.C.",
+        "name": "MILLSAP AND SINGER, P.C."
+      },
+      "feeList": [
+        {
+          "id": 6,
+          "name": "RECORDING FEE",
+          "amount": 27.0
+        }
+      ],
+      "shielded": false
+    },
+    {
+      "searchDocId": 2170950,
+      "docNo": 8306384,
+      "userDocNo": "2025R-023313",
+      "docType": "APPOINTMENT",
+      "docTypeCode": "APPOINT",
+      "docDate": "2025-09-04",
+      "docRecordedDateOnly": null,
+      "docRecordedTimeOnly": null,
+      "docRecordedDateTime": [
+        "2025-09-12",
+        "09:38:47.74"
+      ],
+      "refNo": "",
+      "bookPage": null,
+      "book": null,
+      "page": null,
+      "consideration": 0.0,
+      "legalSummary": "Sub: HILLANDALE  9-41 ",
+      "imageExists": true,
+      "docStatus": "A",
+      "partyOne": "FREEDOM MORTGAGE CORP ",
+      "partyOneType": "GRANTOR",
+      "partyTwo": "MILLSAP AND SINGER PC",
+      "partyTwoType": "GRANTEE",
+      "pages": 2,
+      "assocDocSummary": "2010R-018818 ",
+      "notes": null,
+      "associatedDocumentList": [
+        {
+          "id": 1706887,
+          "searchDocId": 1353246,
+          "name": "2010R-018818",
+          "imageExists": true,
+          "numberOfPages": 16,
+          "inRepository": true,
+          "documentType": "DEED OF TRUST"
+        }
+      ],
+      "legalList": [
+        {
+          "id": 1690939,
+          "legalType": "S",
+          "description": "HILLANDALE  9-41    ",
+          "notes": "BOOK: 0009 PAGE: 0041\r\nCABINET: A SLIDE: 198\r\n",
+          "portion": null,
+          "propertyNotes": null,
+          "gisParcelStringUrl": null
+        }
+      ],
+      "lawPartyList": [
+        {
+          "id": 5978427,
+          "partyTypeId": 1,
+          "partyTypeDescription": "GRANTOR",
+          "name": null,
+          "additionalName": "FOX JEFFEREY ",
+          "middleName": null,
+          "fullName": "FOX JEFFEREY "
+        },
+        {
+          "id": 5978428,
+          "partyTypeId": 1,
+          "partyTypeDescription": "GRANTOR",
+          "name": null,
+          "additionalName": "FREEDOM MORTGAGE CORP ",
+          "middleName": null,
+          "fullName": "FREEDOM MORTGAGE CORP "
+        },
+        {
+          "id": 5978429,
+          "partyTypeId": 2,
+          "partyTypeDescription": "GRANTEE",
+          "name": null,
+          "additionalName": "MILLSAP AND SINGER PC",
+          "middleName": null,
+          "fullName": "MILLSAP AND SINGER PC"
+        }
+      ],
+      "returnTo": {
+        "id": 79516,
+        "address1": "612 SPIRIT DR",
+        "address2": null,
+        "address3": "ST. LOUIS, MO  63005",
+        "fullAddress": "MILLSAP AND SINGER, P.C.",
+        "name": "MILLSAP AND SINGER, P.C."
+      },
+      "feeList": [
+        {
+          "id": 6,
+          "name": "RECORDING FEE",
+          "amount": 27.0
+        }
+      ],
+      "shielded": false
+    },
+    {
+      "searchDocId": 2170950,
+      "docNo": 8306384,
+      "userDocNo": "2025R-023313",
+      "docType": "APPOINTMENT",
+      "docTypeCode": "APPOINT",
+      "docDate": "2025-09-04",
+      "docRecordedDateOnly": null,
+      "docRecordedTimeOnly": null,
+      "docRecordedDateTime": [
+        "2025-09-12",
+        "09:38:47.74"
+      ],
+      "refNo": "",
+      "bookPage": null,
+      "book": null,
+      "page": null,
+      "consideration": 0.0,
+      "legalSummary": "Sub: HILLANDALE  9-41 ",
+      "imageExists": true,
+      "docStatus": "A",
+      "partyOne": "FOX JEFFEREY ",
+      "partyOneType": "GRANTOR",
+      "partyTwo": "MILLSAP AND SINGER PC",
+      "partyTwoType": "GRANTEE",
+      "pages": 2,
+      "assocDocSummary": "2010R-018818 ",
+      "notes": null,
+      "associatedDocumentList": [
+        {
+          "id": 1706887,
+          "searchDocId": 1353246,
+          "name": "2010R-018818",
+          "imageExists": true,
+          "numberOfPages": 16,
+          "inRepository": true,
+          "documentType": "DEED OF TRUST"
+        }
+      ],
+      "legalList": [
+        {
+          "id": 1690939,
+          "legalType": "S",
+          "description": "HILLANDALE  9-41    ",
+          "notes": "BOOK: 0009 PAGE: 0041\r\nCABINET: A SLIDE: 198\r\n",
+          "portion": null,
+          "propertyNotes": null,
+          "gisParcelStringUrl": null
+        }
+      ],
+      "lawPartyList": [
+        {
+          "id": 5978427,
+          "partyTypeId": 1,
+          "partyTypeDescription": "GRANTOR",
+          "name": null,
+          "additionalName": "FOX JEFFEREY ",
+          "middleName": null,
+          "fullName": "FOX JEFFEREY "
+        },
+        {
+          "id": 5978428,
+          "partyTypeId": 1,
+          "partyTypeDescription": "GRANTOR",
+          "name": null,
+          "additionalName": "FREEDOM MORTGAGE CORP ",
+          "middleName": null,
+          "fullName": "FREEDOM MORTGAGE CORP "
+        },
+        {
+          "id": 5978429,
+          "partyTypeId": 2,
+          "partyTypeDescription": "GRANTEE",
+          "name": null,
+          "additionalName": "MILLSAP AND SINGER PC",
+          "middleName": null,
+          "fullName": "MILLSAP AND SINGER PC"
+        }
+      ],
+      "returnTo": {
+        "id": 79516,
+        "address1": "612 SPIRIT DR",
+        "address2": null,
+        "address3": "ST. LOUIS, MO  63005",
+        "fullAddress": "MILLSAP AND SINGER, P.C.",
+        "name": "MILLSAP AND SINGER, P.C."
+      },
+      "feeList": [
+        {
+          "id": 6,
+          "name": "RECORDING FEE",
+          "amount": 27.0
+        }
+      ],
+      "shielded": false
+    },
+    {
+      "searchDocId": 2170911,
+      "docNo": 8306344,
+      "userDocNo": "2025R-023280",
+      "docType": "APPOINTMENT",
+      "docTypeCode": "APPOINT",
+      "docDate": "2025-09-09",
+      "docRecordedDateOnly": null,
+      "docRecordedTimeOnly": null,
+      "docRecordedDateTime": [
+        "2025-09-12",
+        "08:02:59.25"
+      ],
+      "refNo": "",
+      "bookPage": null,
+      "book": null,
+      "page": null,
+      "consideration": 0.0,
+      "legalSummary": "Sub: SILVER MEADOWS BL 3  25-18  Lot: 16",
+      "imageExists": true,
+      "docStatus": "A",
+      "partyOne": "US BANK",
+      "partyOneType": "GRANTOR",
+      "partyTwo": "SOUTHLAW PC ",
+      "partyTwoType": "GRANTEE",
+      "pages": 2,
+      "assocDocSummary": "2021R-042702 ",
+      "notes": null,
+      "associatedDocumentList": [
+        {
+          "id": 8107971,
+          "searchDocId": 1985715,
+          "name": "2021R-042702",
+          "imageExists": true,
+          "numberOfPages": 18,
+          "inRepository": true,
+          "documentType": "DEED OF TRUST"
+        }
+      ],
+      "legalList": [
+        {
+          "id": 1690903,
+          "legalType": "S",
+          "description": "SILVER MEADOWS BL 3  25-18 L:16   ",
+          "notes": "BOOK: 0025 PAGE: 0018\r\nCABINET: B SLIDE: 97",
+          "portion": null,
+          "propertyNotes": null,
+          "gisParcelStringUrl": null
+        }
+      ],
+      "lawPartyList": [
+        {
+          "id": 5978320,
+          "partyTypeId": 1,
+          "partyTypeDescription": "GRANTOR",
+          "name": null,
+          "additionalName": "US BANK",
+          "middleName": null,
+          "fullName": "US BANK"
+        },
+        {
+          "id": 5978318,
+          "partyTypeId": 1,
+          "partyTypeDescription": "GRANTOR",
+          "name": null,
+          "additionalName": "DOOLEY MICHAEL D ",
+          "middleName": null,
+          "fullName": "DOOLEY MICHAEL D "
+        },
+        {
+          "id": 5978319,
+          "partyTypeId": 2,
+          "partyTypeDescription": "GRANTEE",
+          "name": null,
+          "additionalName": "SOUTHLAW PC ",
+          "middleName": null,
+          "fullName": "SOUTHLAW PC "
+        }
+      ],
+      "returnTo": {
+        "id": 22055,
+        "address1": "13160 FOSTER AVE. SUITE 100",
+        "address2": null,
+        "address3": "OVERLAND PARK, KS  66213",
+        "fullAddress": "SOUTHLAW P.C.",
+        "name": "SOUTHLAW P.C."
+      },
+      "feeList": [
+        {
+          "id": 6,
+          "name": "RECORDING FEE",
+          "amount": 27.0
+        }
+      ],
+      "shielded": false
+    },
+    {
+      "searchDocId": 2170911,
+      "docNo": 8306344,
+      "userDocNo": "2025R-023280",
+      "docType": "APPOINTMENT",
+      "docTypeCode": "APPOINT",
+      "docDate": "2025-09-09",
+      "docRecordedDateOnly": null,
+      "docRecordedTimeOnly": null,
+      "docRecordedDateTime": [
+        "2025-09-12",
+        "08:02:59.25"
+      ],
+      "refNo": "",
+      "bookPage": null,
+      "book": null,
+      "page": null,
+      "consideration": 0.0,
+      "legalSummary": "Sub: SILVER MEADOWS BL 3  25-18  Lot: 16",
+      "imageExists": true,
+      "docStatus": "A",
+      "partyOne": "SOUTHLAW PC ",
+      "partyOneType": "GRANTEE",
+      "partyTwo": "US BANK",
+      "partyTwoType": "GRANTOR",
+      "pages": 2,
+      "assocDocSummary": "2021R-042702 ",
+      "notes": null,
+      "associatedDocumentList": [
+        {
+          "id": 8107971,
+          "searchDocId": 1985715,
+          "name": "2021R-042702",
+          "imageExists": true,
+          "numberOfPages": 18,
+          "inRepository": true,
+          "documentType": "DEED OF TRUST"
+        }
+      ],
+      "legalList": [
+        {
+          "id": 1690903,
+          "legalType": "S",
+          "description": "SILVER MEADOWS BL 3  25-18 L:16   ",
+          "notes": "BOOK: 0025 PAGE: 0018\r\nCABINET: B SLIDE: 97",
+          "portion": null,
+          "propertyNotes": null,
+          "gisParcelStringUrl": null
+        }
+      ],
+      "lawPartyList": [
+        {
+          "id": 5978320,
+          "partyTypeId": 1,
+          "partyTypeDescription": "GRANTOR",
+          "name": null,
+          "additionalName": "US BANK",
+          "middleName": null,
+          "fullName": "US BANK"
+        },
+        {
+          "id": 5978318,
+          "partyTypeId": 1,
+          "partyTypeDescription": "GRANTOR",
+          "name": null,
+          "additionalName": "DOOLEY MICHAEL D ",
+          "middleName": null,
+          "fullName": "DOOLEY MICHAEL D "
+        },
+        {
+          "id": 5978319,
+          "partyTypeId": 2,
+          "partyTypeDescription": "GRANTEE",
+          "name": null,
+          "additionalName": "SOUTHLAW PC ",
+          "middleName": null,
+          "fullName": "SOUTHLAW PC "
+        }
+      ],
+      "returnTo": {
+        "id": 22055,
+        "address1": "13160 FOSTER AVE. SUITE 100",
+        "address2": null,
+        "address3": "OVERLAND PARK, KS  66213",
+        "fullAddress": "SOUTHLAW P.C.",
+        "name": "SOUTHLAW P.C."
+      },
+      "feeList": [
+        {
+          "id": 6,
+          "name": "RECORDING FEE",
+          "amount": 27.0
+        }
+      ],
+      "shielded": false
+    },
+    {
+      "searchDocId": 2170911,
+      "docNo": 8306344,
+      "userDocNo": "2025R-023280",
+      "docType": "APPOINTMENT",
+      "docTypeCode": "APPOINT",
+      "docDate": "2025-09-09",
+      "docRecordedDateOnly": null,
+      "docRecordedTimeOnly": null,
+      "docRecordedDateTime": [
+        "2025-09-12",
+        "08:02:59.25"
+      ],
+      "refNo": "",
+      "bookPage": null,
+      "book": null,
+      "page": null,
+      "consideration": 0.0,
+      "legalSummary": "Sub: SILVER MEADOWS BL 3  25-18  Lot: 16",
+      "imageExists": true,
+      "docStatus": "A",
+      "partyOne": "DOOLEY MICHAEL D ",
+      "partyOneType": "GRANTOR",
+      "partyTwo": "SOUTHLAW PC ",
+      "partyTwoType": "GRANTEE",
+      "pages": 2,
+      "assocDocSummary": "2021R-042702 ",
+      "notes": null,
+      "associatedDocumentList": [
+        {
+          "id": 8107971,
+          "searchDocId": 1985715,
+          "name": "2021R-042702",
+          "imageExists": true,
+          "numberOfPages": 18,
+          "inRepository": true,
+          "documentType": "DEED OF TRUST"
+        }
+      ],
+      "legalList": [
+        {
+          "id": 1690903,
+          "legalType": "S",
+          "description": "SILVER MEADOWS BL 3  25-18 L:16   ",
+          "notes": "BOOK: 0025 PAGE: 0018\r\nCABINET: B SLIDE: 97",
+          "portion": null,
+          "propertyNotes": null,
+          "gisParcelStringUrl": null
+        }
+      ],
+      "lawPartyList": [
+        {
+          "id": 5978320,
+          "partyTypeId": 1,
+          "partyTypeDescription": "GRANTOR",
+          "name": null,
+          "additionalName": "US BANK",
+          "middleName": null,
+          "fullName": "US BANK"
+        },
+        {
+          "id": 5978318,
+          "partyTypeId": 1,
+          "partyTypeDescription": "GRANTOR",
+          "name": null,
+          "additionalName": "DOOLEY MICHAEL D ",
+          "middleName": null,
+          "fullName": "DOOLEY MICHAEL D "
+        },
+        {
+          "id": 5978319,
+          "partyTypeId": 2,
+          "partyTypeDescription": "GRANTEE",
+          "name": null,
+          "additionalName": "SOUTHLAW PC ",
+          "middleName": null,
+          "fullName": "SOUTHLAW PC "
+        }
+      ],
+      "returnTo": {
+        "id": 22055,
+        "address1": "13160 FOSTER AVE. SUITE 100",
+        "address2": null,
+        "address3": "OVERLAND PARK, KS  66213",
+        "fullAddress": "SOUTHLAW P.C.",
+        "name": "SOUTHLAW P.C."
+      },
+      "feeList": [
+        {
+          "id": 6,
+          "name": "RECORDING FEE",
+          "amount": 27.0
+        }
+      ],
+      "shielded": false
+    },
+    {
+      "searchDocId": 2170697,
+      "docNo": 8306102,
+      "userDocNo": "2025R-023121",
+      "docType": "APPOINTMENT",
+      "docTypeCode": "APPOINT",
+      "docDate": "2025-09-02",
+      "docRecordedDateOnly": null,
+      "docRecordedTimeOnly": null,
+      "docRecordedDateTime": [
+        "2025-09-10",
+        "11:17:24.7166667"
+      ],
+      "refNo": "",
+      "bookPage": null,
+      "book": null,
+      "page": null,
+      "consideration": 0.0,
+      "legalSummary": "Sub: SOUTHERN AIRE ESTATES  31-9  Lot: 18 Block: 9",
+      "imageExists": true,
+      "docStatus": "A",
+      "partyOne": "SOUTHLAW PC ",
+      "partyOneType": "GRANTEE",
+      "partyTwo": "MYERS JORDAN ",
+      "partyTwoType": "GRANTOR",
+      "pages": 2,
+      "assocDocSummary": "2021R-043783 ",
+      "notes": null,
+      "associatedDocumentList": [
+        {
+          "id": 8109337,
+          "searchDocId": 1986985,
+          "name": "2021R-043783",
+          "imageExists": true,
+          "numberOfPages": 14,
+          "inRepository": true,
+          "documentType": "DEED OF TRUST"
+        }
+      ],
+      "legalList": [
+        {
+          "id": 1690218,
+          "legalType": "S",
+          "description": "SOUTHERN AIRE ESTATES  31-9 L:18 B:9  ",
+          "notes": "BOOK: 0031 PAGE: 0009\r\nCABINET: B SLIDE: 183",
+          "portion": null,
+          "propertyNotes": null,
+          "gisParcelStringUrl": null
+        }
+      ],
+      "lawPartyList": [
+        {
+          "id": 5976529,
+          "partyTypeId": 1,
+          "partyTypeDescription": "GRANTOR",
+          "name": null,
+          "additionalName": "MYERS JORDAN ",
+          "middleName": null,
+          "fullName": "MYERS JORDAN "
+        },
+        {
+          "id": 5976528,
+          "partyTypeId": 1,
+          "partyTypeDescription": "GRANTOR",
+          "name": null,
+          "additionalName": "BELL BANK ",
+          "middleName": null,
+          "fullName": "BELL BANK "
+        },
+        {
+          "id": 5976530,
+          "partyTypeId": 2,
+          "partyTypeDescription": "GRANTEE",
+          "name": null,
+          "additionalName": "SOUTHLAW PC ",
+          "middleName": null,
+          "fullName": "SOUTHLAW PC "
+        }
+      ],
+      "returnTo": {
+        "id": 22055,
+        "address1": "13160 FOSTER AVE. SUITE 100",
+        "address2": null,
+        "address3": "OVERLAND PARK, KS  66213",
+        "fullAddress": "SOUTHLAW P.C.",
+        "name": "SOUTHLAW P.C."
+      },
+      "feeList": [
+        {
+          "id": 6,
+          "name": "RECORDING FEE",
+          "amount": 27.0
+        }
+      ],
+      "shielded": false
+    },
+    {
+      "searchDocId": 2170697,
+      "docNo": 8306102,
+      "userDocNo": "2025R-023121",
+      "docType": "APPOINTMENT",
+      "docTypeCode": "APPOINT",
+      "docDate": "2025-09-02",
+      "docRecordedDateOnly": null,
+      "docRecordedTimeOnly": null,
+      "docRecordedDateTime": [
+        "2025-09-10",
+        "11:17:24.7166667"
+      ],
+      "refNo": "",
+      "bookPage": null,
+      "book": null,
+      "page": null,
+      "consideration": 0.0,
+      "legalSummary": "Sub: SOUTHERN AIRE ESTATES  31-9  Lot: 18 Block: 9",
+      "imageExists": true,
+      "docStatus": "A",
+      "partyOne": "MYERS JORDAN ",
+      "partyOneType": "GRANTOR",
+      "partyTwo": "SOUTHLAW PC ",
+      "partyTwoType": "GRANTEE",
+      "pages": 2,
+      "assocDocSummary": "2021R-043783 ",
+      "notes": null,
+      "associatedDocumentList": [
+        {
+          "id": 8109337,
+          "searchDocId": 1986985,
+          "name": "2021R-043783",
+          "imageExists": true,
+          "numberOfPages": 14,
+          "inRepository": true,
+          "documentType": "DEED OF TRUST"
+        }
+      ],
+      "legalList": [
+        {
+          "id": 1690218,
+          "legalType": "S",
+          "description": "SOUTHERN AIRE ESTATES  31-9 L:18 B:9  ",
+          "notes": "BOOK: 0031 PAGE: 0009\r\nCABINET: B SLIDE: 183",
+          "portion": null,
+          "propertyNotes": null,
+          "gisParcelStringUrl": null
+        }
+      ],
+      "lawPartyList": [
+        {
+          "id": 5976529,
+          "partyTypeId": 1,
+          "partyTypeDescription": "GRANTOR",
+          "name": null,
+          "additionalName": "MYERS JORDAN ",
+          "middleName": null,
+          "fullName": "MYERS JORDAN "
+        },
+        {
+          "id": 5976528,
+          "partyTypeId": 1,
+          "partyTypeDescription": "GRANTOR",
+          "name": null,
+          "additionalName": "BELL BANK ",
+          "middleName": null,
+          "fullName": "BELL BANK "
+        },
+        {
+          "id": 5976530,
+          "partyTypeId": 2,
+          "partyTypeDescription": "GRANTEE",
+          "name": null,
+          "additionalName": "SOUTHLAW PC ",
+          "middleName": null,
+          "fullName": "SOUTHLAW PC "
+        }
+      ],
+      "returnTo": {
+        "id": 22055,
+        "address1": "13160 FOSTER AVE. SUITE 100",
+        "address2": null,
+        "address3": "OVERLAND PARK, KS  66213",
+        "fullAddress": "SOUTHLAW P.C.",
+        "name": "SOUTHLAW P.C."
+      },
+      "feeList": [
+        {
+          "id": 6,
+          "name": "RECORDING FEE",
+          "amount": 27.0
+        }
+      ],
+      "shielded": false
+    },
+    {
+      "searchDocId": 2170697,
+      "docNo": 8306102,
+      "userDocNo": "2025R-023121",
+      "docType": "APPOINTMENT",
+      "docTypeCode": "APPOINT",
+      "docDate": "2025-09-02",
+      "docRecordedDateOnly": null,
+      "docRecordedTimeOnly": null,
+      "docRecordedDateTime": [
+        "2025-09-10",
+        "11:17:24.7166667"
+      ],
+      "refNo": "",
+      "bookPage": null,
+      "book": null,
+      "page": null,
+      "consideration": 0.0,
+      "legalSummary": "Sub: SOUTHERN AIRE ESTATES  31-9  Lot: 18 Block: 9",
+      "imageExists": true,
+      "docStatus": "A",
+      "partyOne": "BELL BANK ",
+      "partyOneType": "GRANTOR",
+      "partyTwo": "SOUTHLAW PC ",
+      "partyTwoType": "GRANTEE",
+      "pages": 2,
+      "assocDocSummary": "2021R-043783 ",
+      "notes": null,
+      "associatedDocumentList": [
+        {
+          "id": 8109337,
+          "searchDocId": 1986985,
+          "name": "2021R-043783",
+          "imageExists": true,
+          "numberOfPages": 14,
+          "inRepository": true,
+          "documentType": "DEED OF TRUST"
+        }
+      ],
+      "legalList": [
+        {
+          "id": 1690218,
+          "legalType": "S",
+          "description": "SOUTHERN AIRE ESTATES  31-9 L:18 B:9  ",
+          "notes": "BOOK: 0031 PAGE: 0009\r\nCABINET: B SLIDE: 183",
+          "portion": null,
+          "propertyNotes": null,
+          "gisParcelStringUrl": null
+        }
+      ],
+      "lawPartyList": [
+        {
+          "id": 5976529,
+          "partyTypeId": 1,
+          "partyTypeDescription": "GRANTOR",
+          "name": null,
+          "additionalName": "MYERS JORDAN ",
+          "middleName": null,
+          "fullName": "MYERS JORDAN "
+        },
+        {
+          "id": 5976528,
+          "partyTypeId": 1,
+          "partyTypeDescription": "GRANTOR",
+          "name": null,
+          "additionalName": "BELL BANK ",
+          "middleName": null,
+          "fullName": "BELL BANK "
+        },
+        {
+          "id": 5976530,
+          "partyTypeId": 2,
+          "partyTypeDescription": "GRANTEE",
+          "name": null,
+          "additionalName": "SOUTHLAW PC ",
+          "middleName": null,
+          "fullName": "SOUTHLAW PC "
+        }
+      ],
+      "returnTo": {
+        "id": 22055,
+        "address1": "13160 FOSTER AVE. SUITE 100",
+        "address2": null,
+        "address3": "OVERLAND PARK, KS  66213",
+        "fullAddress": "SOUTHLAW P.C.",
+        "name": "SOUTHLAW P.C."
+      },
+      "feeList": [
+        {
+          "id": 6,
+          "name": "RECORDING FEE",
+          "amount": 27.0
+        }
+      ],
+      "shielded": false
+    },
+    {
+      "searchDocId": 2170175,
+      "docNo": 8305523,
+      "userDocNo": "2025R-022712",
+      "docType": "APPOINTMENT",
+      "docTypeCode": "APPOINT",
+      "docDate": "2025-09-05",
+      "docRecordedDateOnly": null,
+      "docRecordedTimeOnly": null,
+      "docRecordedDateTime": [
+        "2025-09-08",
+        "08:08:58.1366667"
+      ],
+      "refNo": "",
+      "bookPage": null,
+      "book": null,
+      "page": null,
+      "consideration": 0.0,
+      "legalSummary": "S: 0 T: 40 R: 6",
+      "imageExists": true,
+      "docStatus": "A",
+      "partyOne": "EASTPLAINS CORP ",
+      "partyOneType": "GRANTEE",
+      "partyTwo": "BAUM MICHAEL P ",
+      "partyTwoType": "GRANTOR",
+      "pages": 3,
+      "assocDocSummary": "2018R-037726 ",
+      "notes": null,
+      "associatedDocumentList": [
+        {
+          "id": 2230970,
+          "searchDocId": 1821456,
+          "name": "2018R-037726",
+          "imageExists": true,
+          "numberOfPages": 17,
+          "inRepository": true,
+          "documentType": "DEED OF TRUST"
+        }
+      ],
+      "legalList": [
+        {
+          "id": 575992,
+          "legalType": "T",
+          "description": "S: 0 T: 40 R: 6",
+          "notes": null,
+          "portion": null,
+          "propertyNotes": "US SURVEY 416",
+          "gisParcelStringUrl": null
+        }
+      ],
+      "lawPartyList": [
+        {
+          "id": 5974411,
+          "partyTypeId": 1,
+          "partyTypeDescription": "GRANTOR",
+          "name": null,
+          "additionalName": "BAUM MICHAEL P ",
+          "middleName": null,
+          "fullName": "BAUM MICHAEL P "
+        },
+        {
+          "id": 5974410,
+          "partyTypeId": 1,
+          "partyTypeDescription": "GRANTOR",
+          "name": null,
+          "additionalName": "ALABAMA HOUSING FINANCE AUTHORITY ",
+          "middleName": null,
+          "fullName": "ALABAMA HOUSING FINANCE AUTHORITY "
+        },
+        {
+          "id": 5974412,
+          "partyTypeId": 2,
+          "partyTypeDescription": "GRANTEE",
+          "name": null,
+          "additionalName": "EASTPLAINS CORP ",
+          "middleName": null,
+          "fullName": "EASTPLAINS CORP "
+        }
+      ],
+      "returnTo": {
+        "id": 160122,
+        "address1": "12400 OLIVE BLVD.",
+        "address2": "STE. 555",
+        "address3": "SAINT LOUIS, MO  63141",
+        "fullAddress": "BONIAL & ASSOCIATES, PC",
+        "name": "BONIAL & ASSOCIATES, PC"
+      },
+      "feeList": [
+        {
+          "id": 6,
+          "name": "RECORDING FEE",
+          "amount": 30.0
+        }
+      ],
+      "shielded": false
+    },
+    {
+      "searchDocId": 2170175,
+      "docNo": 8305523,
+      "userDocNo": "2025R-022712",
+      "docType": "APPOINTMENT",
+      "docTypeCode": "APPOINT",
+      "docDate": "2025-09-05",
+      "docRecordedDateOnly": null,
+      "docRecordedTimeOnly": null,
+      "docRecordedDateTime": [
+        "2025-09-08",
+        "08:08:58.1366667"
+      ],
+      "refNo": "",
+      "bookPage": null,
+      "book": null,
+      "page": null,
+      "consideration": 0.0,
+      "legalSummary": "S: 0 T: 40 R: 6",
+      "imageExists": true,
+      "docStatus": "A",
+      "partyOne": "BAUM MICHAEL P ",
+      "partyOneType": "GRANTOR",
+      "partyTwo": "EASTPLAINS CORP ",
+      "partyTwoType": "GRANTEE",
+      "pages": 3,
+      "assocDocSummary": "2018R-037726 ",
+      "notes": null,
+      "associatedDocumentList": [
+        {
+          "id": 2230970,
+          "searchDocId": 1821456,
+          "name": "2018R-037726",
+          "imageExists": true,
+          "numberOfPages": 17,
+          "inRepository": true,
+          "documentType": "DEED OF TRUST"
+        }
+      ],
+      "legalList": [
+        {
+          "id": 575992,
+          "legalType": "T",
+          "description": "S: 0 T: 40 R: 6",
+          "notes": null,
+          "portion": null,
+          "propertyNotes": "US SURVEY 416",
+          "gisParcelStringUrl": null
+        }
+      ],
+      "lawPartyList": [
+        {
+          "id": 5974411,
+          "partyTypeId": 1,
+          "partyTypeDescription": "GRANTOR",
+          "name": null,
+          "additionalName": "BAUM MICHAEL P ",
+          "middleName": null,
+          "fullName": "BAUM MICHAEL P "
+        },
+        {
+          "id": 5974410,
+          "partyTypeId": 1,
+          "partyTypeDescription": "GRANTOR",
+          "name": null,
+          "additionalName": "ALABAMA HOUSING FINANCE AUTHORITY ",
+          "middleName": null,
+          "fullName": "ALABAMA HOUSING FINANCE AUTHORITY "
+        },
+        {
+          "id": 5974412,
+          "partyTypeId": 2,
+          "partyTypeDescription": "GRANTEE",
+          "name": null,
+          "additionalName": "EASTPLAINS CORP ",
+          "middleName": null,
+          "fullName": "EASTPLAINS CORP "
+        }
+      ],
+      "returnTo": {
+        "id": 160122,
+        "address1": "12400 OLIVE BLVD.",
+        "address2": "STE. 555",
+        "address3": "SAINT LOUIS, MO  63141",
+        "fullAddress": "BONIAL & ASSOCIATES, PC",
+        "name": "BONIAL & ASSOCIATES, PC"
+      },
+      "feeList": [
+        {
+          "id": 6,
+          "name": "RECORDING FEE",
+          "amount": 30.0
+        }
+      ],
+      "shielded": false
+    },
+    {
+      "searchDocId": 2170175,
+      "docNo": 8305523,
+      "userDocNo": "2025R-022712",
+      "docType": "APPOINTMENT",
+      "docTypeCode": "APPOINT",
+      "docDate": "2025-09-05",
+      "docRecordedDateOnly": null,
+      "docRecordedTimeOnly": null,
+      "docRecordedDateTime": [
+        "2025-09-08",
+        "08:08:58.1366667"
+      ],
+      "refNo": "",
+      "bookPage": null,
+      "book": null,
+      "page": null,
+      "consideration": 0.0,
+      "legalSummary": "S: 0 T: 40 R: 6",
+      "imageExists": true,
+      "docStatus": "A",
+      "partyOne": "ALABAMA HOUSING FINANCE AUTHORITY ",
+      "partyOneType": "GRANTOR",
+      "partyTwo": "EASTPLAINS CORP ",
+      "partyTwoType": "GRANTEE",
+      "pages": 3,
+      "assocDocSummary": "2018R-037726 ",
+      "notes": null,
+      "associatedDocumentList": [
+        {
+          "id": 2230970,
+          "searchDocId": 1821456,
+          "name": "2018R-037726",
+          "imageExists": true,
+          "numberOfPages": 17,
+          "inRepository": true,
+          "documentType": "DEED OF TRUST"
+        }
+      ],
+      "legalList": [
+        {
+          "id": 575992,
+          "legalType": "T",
+          "description": "S: 0 T: 40 R: 6",
+          "notes": null,
+          "portion": null,
+          "propertyNotes": "US SURVEY 416",
+          "gisParcelStringUrl": null
+        }
+      ],
+      "lawPartyList": [
+        {
+          "id": 5974411,
+          "partyTypeId": 1,
+          "partyTypeDescription": "GRANTOR",
+          "name": null,
+          "additionalName": "BAUM MICHAEL P ",
+          "middleName": null,
+          "fullName": "BAUM MICHAEL P "
+        },
+        {
+          "id": 5974410,
+          "partyTypeId": 1,
+          "partyTypeDescription": "GRANTOR",
+          "name": null,
+          "additionalName": "ALABAMA HOUSING FINANCE AUTHORITY ",
+          "middleName": null,
+          "fullName": "ALABAMA HOUSING FINANCE AUTHORITY "
+        },
+        {
+          "id": 5974412,
+          "partyTypeId": 2,
+          "partyTypeDescription": "GRANTEE",
+          "name": null,
+          "additionalName": "EASTPLAINS CORP ",
+          "middleName": null,
+          "fullName": "EASTPLAINS CORP "
+        }
+      ],
+      "returnTo": {
+        "id": 160122,
+        "address1": "12400 OLIVE BLVD.",
+        "address2": "STE. 555",
+        "address3": "SAINT LOUIS, MO  63141",
+        "fullAddress": "BONIAL & ASSOCIATES, PC",
+        "name": "BONIAL & ASSOCIATES, PC"
+      },
+      "feeList": [
+        {
+          "id": 6,
+          "name": "RECORDING FEE",
+          "amount": 30.0
+        }
+      ],
+      "shielded": false
+    }
+  ],
+  "auth_token": "Bearer eyJhbGciOiJSU0EtT0FFUCIsImVuYyI6IkEyNTZDQkMtSFM1MTIiLCJraWQiOiI2MkUxMDZBNkRERkM2MUZDQUVENDMwQUI3NTUyRDM1OEQ0OTgyODRBIiwidHlwIjoiYXQrand0IiwiY3R5IjoiSldUIn0.NVQeeADR2GkPFkgzbNlnAlwFipJBrwa4kUWbJmNe4jwIZaphEDlyhze2S1I_T_f0kwk24cQ9I2LmysAU7lHcCXJARbkRsYECeDJnTReQLpGDG_NegLoBV5Fm8KRruEslkPG78ngNyVzyywbRwv_I2kkGg2GwN9H7w-etriuMu_5e9Wni8U1UGokThjGVeugsJrQkrIQwc5pJoHHwCMpBPiLQIxAeU4_61I1Fc6531TcHOSmo3o_cTVTTp_ZCqmgg62w5Sw5hcVbdwhAQSCyey3f1W2D9xDNpt9SLNYiRgCKOKmuHR7ojDMgmrs13LbaM5q-VHWVF-tG9ckuq36cbVw.tI2pcIZ6kJ15srfoX4PyIw.doerdQhWA_dC2xHk637jwTv7-LN4G-TbWq2ZyDStf9dRi0Uu2iP5SyccPIAe_6dcxbd0JM5xBWGDsHUFl-5kH4PizFNUHLuHQtFEb8AjKdaOpjxci1v2hHLDfjzEKmDS5fcrTFevqWZ2keuaesiOZbPFztlYSyYxNViSqU2LvFgQ8LQvtQkkviQ9gcvr7pSOut3Kz19MvNvivBwpJMhowWx_z98s6mbmmvLFoh_7igFGEqQBZI7kAr33nUWHKPDnA4xeUKJaI5Kdr5wsEI_NaV1uLTFmG6S-Vjl0-Nne3vuzeYJIQscMCep2m8bghqr-K9Ph9RmQxOMRY2bCbnsZvLFpYvo7fyZoTdeljsAeMZwXYy5ip_XT_GHLAw4CR0HlIg5nxbD_QZi175ejCTUIkg-J4-QMuuQCQiuG02QpR-VFZpy9Z2NmiRz5Pfs1iBMW-M6oxrfU3hK0f8uIBv-vQKJkldSqKL8bpQ9QLUNbxQkmN0N19YvlFCH3ETIAxa7NqwPT3yx-qSl0fmKovk4jZ7i0a0yk5iqk29X895HNBRxU4CEfAICEgZpip5D84-F4e4ChtoRWx17uHRtot0QNjXay6L000Sme1XbOVfJBPPCkc2MDtkk9WsP_3TCuOcBK00YQSoqdl069koipfM7xdXqQgqts1-FND0NkQ5iqPN7MN8uMfeWRAFM7zBRCXfkWYQSuQDvn7GbHj0w4n71YwxnUEgROFf5LXJDmLt6pxFweQwaudSFWsUv1S2zbVshFcdk9cwiDPN01dCmHcTkUgDHs4_bVKg4f3H1llJlbrMPquZ-PJQVMHe-lQaF6TwNaBR-TFKJ2JXUXT9TVtiNBATCjXAfvCgEDSzwZqNFpZK61vJ1FM2vU7sr884zmwm_IEd4K097L9fE5u5rh7pufKhN1-ZbFXHI9mjedIdboH6DvONbGvxo79Jvu7fP3Q1N9rip6aqQENNP_eLW0-2qHFuVlhj1afg-V3cKjoDQuoAUT_TTfhWfEYN04px4XjdiyfbgI_GWr6WCGsGxBpR9y61z7cSk-dv-bvW5ICkukH0BNqeRq7wqhH6LrT78e84T1U7LdKUqs-cdabtwaKRw8oRBPwWjGWd3-Cg9YADqFDD99KJ2wWVptAt1s3bFhEHwo4soefcByWUXOt8hcb773qWpoFUUfO2uESm8x9fbyII5ADwAnWCedlmsOYsimVop-tJ2CUupWjd6uyYpCjXFN4aZNP4zpNSnw_xxZcEJsaBL7WGSkLRbODFbIhLwH7ohZJdGrJ2JO9ntNu_Ew4RJQMC36iFxy6M0rFTw2JL7LYpymfGn9FM4NIZyZMpGph9c4.7G2v-sjJQi5LRNpeMHt95wYpEjLFQ9OoZxCaVAisG2k"
+}
