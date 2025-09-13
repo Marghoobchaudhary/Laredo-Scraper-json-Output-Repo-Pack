@@ -36,9 +36,20 @@ class Laredo:
 
         self.max_parties = int(max_parties)
         self.days_back = int(days_back)
-        self.rescrape_indices = (
-            [int(i) for i in str(rescrape_indices).split()] if rescrape_indices else []
-        )
+
+        # Robust parsing of rescrape indices:
+        # supports: ["1","2"], "1 2", "'1 2'", or None
+        self.rescrape_indices = []
+        if isinstance(rescrape_indices, list):
+            tokens = []
+            for t in rescrape_indices:
+                tokens.extend(str(t).split())
+            self.rescrape_indices = [int(i) for i in tokens if str(i).strip().isdigit()]
+        elif rescrape_indices:
+            self.rescrape_indices = [
+                int(i) for i in str(rescrape_indices).split() if str(i).strip().isdigit()
+            ]
+
         # If provided, only scrape these county names (exact, comma-separated)
         self.only_counties = (
             [c.strip() for c in only_counties.split(",")] if only_counties else None
@@ -246,7 +257,6 @@ class Laredo:
                     (By.XPATH, "//input[contains(@class, 'p-dropdown-filter')]")
                 )
             )
-            # Use existing logic + your special cases
             if second_pass:
                 search_input_field.send_keys("RESOLUTION")
             else:
@@ -267,7 +277,6 @@ class Laredo:
                 )
             )
             run_search_button.click()
-            # allow results to render
             time.sleep(max(6, self.WAIT_DURATION // 2))
         except Exception as e:
             print("Error in __fill_form()", e)
@@ -302,7 +311,6 @@ class Laredo:
                     elif method == "Network.requestWillBeSent":
                         params = message.get("params", {})
                         headers = params.get("request", {}).get("headers", {})
-                        # Sometimes the Authorization header shows up here
                         auth = headers.get("Authorization")
                         if auth and not data["auth_token"]:
                             data["auth_token"] = auth
@@ -315,9 +323,6 @@ class Laredo:
     # ----------------- NEW: read dates from the table -----------------
 
     def __parse_doc_date_text(self, s):
-        """
-        e.g. 'Sep 10, 2025' -> '09/10/2025'
-        """
         s = (s or "").strip()
         if not s:
             return ""
@@ -327,13 +332,9 @@ class Laredo:
                 return dt.strftime("%m/%d/%Y")
             except Exception:
                 pass
-        # if unknown format, just return original
         return s
 
     def __parse_recorded_date_text(self, s):
-        """
-        e.g. 'Sep 12, 2025, 8:27 AM' -> '09/12/2025, 08:27 AM'
-        """
         s = (s or "").strip()
         if not s:
             return ""
@@ -349,30 +350,15 @@ class Laredo:
                 return dt.strftime("%m/%d/%Y, %I:%M %p")
             except Exception:
                 pass
-        # if unknown format, return original
         return s
 
     def __scrape_table_dates_map(self):
         """
-        After the search results render, scrape the table DOM.
-        Each result row has multiple <td class="column-data"> elements starting at 'Doc Number'.
-
-        Index mapping within column-data tds:
-          0 -> Doc Number
-          1 -> Party
-          2 -> Book & Page
-          3 -> Doc Date
-          4 -> Recorded Date
-          5 -> Doc Type
-          6 -> Assoc Doc
-          7 -> Legal Summary
-          8 -> Consideration
-          9 -> Additional Party
-          10 -> Pages
+        Build: { 'DOCNO': {'Doc Date': 'MM/DD/YYYY', 'Recorded Date': 'MM/DD/YYYY, HH:MM AM/PM'} }
+        Assumes 'column-data' TD order matches Doc Number, Party, Book & Page, Doc Date, Recorded Date, ...
         """
         mapping = {}
         try:
-            # Make sure table exists
             _tbody = self.__wait_for_element("//tbody[contains(@class,'p-datatable-tbody')]", False)
             if not _tbody:
                 return mapping
@@ -400,9 +386,6 @@ class Laredo:
     # ----------------- detail enrichment -----------------
 
     def get_doc_details(self, auth_token, search_doc_id):
-        """
-        Pulls legal descriptions to populate 'addresses' and 'parcels'.
-        """
         doc_details = {"addresses": [], "parcels": []}
         try:
             headers = {
@@ -471,7 +454,6 @@ class Laredo:
             max_parties = max_addresses = max_parcels = 0
             for doc_number, records in grouped_data.items():
                 old_record = records[0]
-                # enrich with details
                 if doc_number in doc_id_map:
                     old_record.update(self.get_doc_details(auth_token, doc_id_map[doc_number]))
                 records[0] = old_record
@@ -516,10 +498,6 @@ class Laredo:
     # ----------------- cleaning & writing -----------------
 
     def __clean_data(self, county_slug, docs_list, table_date_map):
-        """
-        Build the flat records for grouping. Fill Doc Date / Recorded Date
-        from API if present, otherwise from the table_date_map.
-        """
         doc_id = 1
         new_docs_list = []
         for doc in docs_list:
@@ -543,12 +521,10 @@ class Laredo:
                     "Pages": doc.get("pages", ""),
                 }
 
-                # Try API datetimes first (ISO or similar)
                 api_doc_date = doc.get("docDate") or doc.get("documentDate")
                 api_rec_date = doc.get("docRecordedDateTime") or doc.get("recordedDateTime")
 
                 if api_doc_date:
-                    # try common formats
                     parsed = None
                     for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
                         try:
@@ -570,7 +546,6 @@ class Laredo:
                     if parsed:
                         new_doc["Recorded Date"] = parsed.strftime("%m/%d/%Y, %I:%M %p")
 
-                # If any date is still empty, override from table map
                 if doc_no in table_date_map:
                     if not new_doc["Doc Date"]:
                         new_doc["Doc Date"] = table_date_map[doc_no].get("Doc Date", "")
@@ -607,7 +582,6 @@ class Laredo:
             total_counties = len(available_counties)
             print("Total Counties:", total_counties)
 
-            # Build a list of (index, name) so we can filter by name if requested
             county_names = []
             for idx in range(total_counties):
                 try:
@@ -624,7 +598,6 @@ class Laredo:
             while current < total_counties:
                 idx, county_name = county_names[current]
 
-                # If only specific counties requested, skip others
                 if self.only_counties and county_name not in self.only_counties:
                     current += 1
                     continue
@@ -643,15 +616,11 @@ class Laredo:
                         self.__close_popup()
                         self.__fill_form(county_name, second_pass=second_pass)
 
-                        # 1) scrape table dates (source of truth for dates)
                         table_date_map = self.__scrape_table_dates_map()
-
-                        # 2) intercept API results + auth (for other fields and details)
                         intercept_data = self.__intercept()
                         docs_list = intercept_data.get("docs_list", [])
                         auth_token = intercept_data.get("auth_token", "")
 
-                        # 3) clean + fill dates from table if API missing
                         cleaned_docs_list = self.__clean_data(
                             county_slug, docs_list, table_date_map
                         )
@@ -677,7 +646,7 @@ class Laredo:
                     scrape_count[idx] = count + 1
                     if idx in self.rescrape_indices and scrape_count[idx] == 1:
                         print(f"Re-scraping {county_name} for second pass")
-                        continue  # Do the second pass
+                        continue
 
                     current += 1
 
@@ -709,7 +678,14 @@ def parse_args():
     p.add_argument("--wait", type=int, default=20, help="UI wait seconds")
     p.add_argument("--max-parties", type=int, default=6, help="Party1..PartyN")
     p.add_argument("--days-back", type=int, default=2, help="Start = today - N days")
-    p.add_argument("--rescrape-indices", default="", help="Space-separated indices (e.g. '1 2')")
+    # Accept 0 or more values; supports: --rescrape-indices 1 2
+    # Also works if passed as a single quoted string.
+    p.add_argument(
+        "--rescrape-indices",
+        nargs="*",
+        default=None,
+        help="Space-separated indices for second pass (e.g. 1 2)",
+    )
     p.add_argument("--only-counties", default="", help='Comma-separated county names (exact matches)')
     p.add_argument("--hard-timeout", type=int, default=0, help="Hard stop seconds for whole flow")
     return p.parse_args()
