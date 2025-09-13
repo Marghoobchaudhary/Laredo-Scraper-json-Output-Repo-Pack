@@ -26,6 +26,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options as ChromeOptions
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutException
 
 # --------------- Utility: logging ---------------
 
@@ -75,14 +76,12 @@ def parse_indices(s: str):
         try:
             out.append(int(p))
         except ValueError:
-            # if it's not an int, ignore (keeps parser resilient)
             log(f"Warning: ignoring non-integer rescrape index token: {p!r}")
     return out
 
 def parse_list(s: str):
     if not s:
         return []
-    # comma or space separated
     parts = re.split(r"[\s,]+", s.strip())
     return [p for p in parts if p]
 
@@ -97,7 +96,7 @@ def get_args():
     ap.add_argument("--only-counties", default="", help="Optional filter: only scrape these county slugs")
     ap.add_argument("--hard-timeout", type=int, default=0, help="Hard kill after N seconds (0=disabled)")
     ap.add_argument("--county-slug", default="st-charles-county", help="Slug used in output IDs and filenames")
-    ap.add_argument("--start-url", default=os.environ.get("LAREDO_URL", ""), help="Optional start URL")
+    ap.add_argument("--start-url", default=os.environ.get("LAREDO_URL", ""), help="Direct URL to the results page")
     return ap.parse_args()
 
 # --------------- Selenium setup ---------------
@@ -105,7 +104,6 @@ def get_args():
 def build_driver(headless: bool):
     chrome_opts = ChromeOptions()
     if headless:
-        # new headless is more reliable in CI
         chrome_opts.add_argument("--headless=new")
     chrome_opts.add_argument("--disable-gpu")
     chrome_opts.add_argument("--no-sandbox")
@@ -125,41 +123,80 @@ def build_driver(headless: bool):
 # --------------- Login / Navigation (optional) ---------------
 
 def maybe_login(driver, wait_secs: int):
-    """
-    If your site needs login, implement here.
-    Leave as no-op if already authenticated by cookie or the site is open.
-    """
     username = os.environ.get("LAREDO_USERNAME", "")
     password = os.environ.get("LAREDO_PASSWORD", "")
     if not username or not password:
         log("No LAREDO_USERNAME/PASSWORD in env — skipping login.")
         return
-
     try:
-        # Example only — replace selectors/flow as needed.
-        # driver.get("https://example.laredo.site/login")
-        # WebDriverWait(driver, wait_secs).until(EC.presence_of_element_located((By.CSS_SELECTOR, "input[name='username']"))).send_keys(username)
-        # driver.find_element(By.CSS_SELECTOR, "input[name='password']").send_keys(password)
-        # driver.find_element(By.CSS_SELECTOR, "button[type='submit']").click()
-        # WebDriverWait(driver, wait_secs).until(EC.presence_of_element_located((By.CSS_SELECTOR, "nav .user-badge")))
+        # Implement as needed for your site; left as stub.
         log("Login stub: implement if needed (skipped).")
     except Exception as e:
         log(f"Login skipped/failed: {e}")
 
+def _any_present(driver, selectors):
+    for sel in selectors:
+        els = driver.find_elements(By.CSS_SELECTOR, sel)
+        if els:
+            return True
+    return False
+
+def _robust_wait_for_table(driver, total_wait_s: int):
+    """
+    Tries multiple likely selectors, with gentle retries to allow Angular/PrimeNG to render.
+    Returns True if found, else False.
+    """
+    selectors = [
+        "table[role='table'] tbody tr",        # generic role table
+        "table.p-datatable-table tbody tr",    # PrimeNG class
+        "#pn_id_910-table tbody tr",           # the id seen in your HTML
+        "table[role='table']"                  # last resort: table exists (rows may be virtualized)
+    ]
+    end = time.time() + total_wait_s
+    attempt = 0
+    last_err = None
+    while time.time() < end:
+        attempt += 1
+        try:
+            if _any_present(driver, selectors):
+                return True
+        except Exception as e:
+            last_err = e
+        time.sleep(0.75)  # let the UI breathe
+        # small scroll to trigger lazy rendering if needed
+        try:
+            driver.execute_script("window.scrollTo(0, document.body.scrollHeight/3);")
+        except Exception:
+            pass
+    if last_err:
+        log(f"Last wait error: {last_err!r}")
+    return False
+
+def _dump_debug_artifacts(driver):
+    try:
+        with open("laredo_page.html", "w", encoding="utf-8") as f:
+            f.write(driver.page_source)
+        log("Saved current page HTML to laredo_page.html")
+    except Exception as e:
+        log(f"Failed to save HTML: {e}")
+    try:
+        driver.save_screenshot("laredo_page.png")
+        log("Saved screenshot to laredo_page.png")
+    except Exception as e:
+        log(f"Failed to save screenshot: {e}")
+
 def navigate_to_results(driver, start_url: str, wait_secs: int):
-    """
-    If you have a direct URL to the results table, put it in --start-url or LAREDO_URL.
-    Otherwise, navigate to it here (stub).
-    """
     if start_url:
         log(f"Opening start URL: {start_url}")
         driver.get(start_url)
     else:
         log("No --start-url provided; assuming we are already at results table.")
-    # Wait for the table to exist
-    WebDriverWait(driver, wait_secs).until(
-        EC.presence_of_element_located((By.CSS_SELECTOR, "table[role='table'] tbody tr"))
-    )
+    # First, give the app a moment to settle
+    time.sleep(2.0)
+    ok = _robust_wait_for_table(driver, max(wait_secs, 10))
+    if not ok:
+        _dump_debug_artifacts(driver)
+        raise TimeoutException("Results table not found after robust wait")
 
 # --------------- Table parsing ---------------
 
@@ -184,7 +221,6 @@ def extract_party_and_role(td_elem):
     try:
         chip = td_elem.find_element(By.CSS_SELECTOR, ".party-chip")
         role_raw = safe_text(chip)
-        # Normalise role text (strip arrows etc.)
         m = re.search(r"\b(GRANTOR|GRANTEE)\b", role_raw, re.IGNORECASE)
         if m:
             role = m.group(1).upper()
@@ -196,31 +232,35 @@ def extract_party_and_role(td_elem):
 def parse_date_mmmd(s: str):
     """
     Parses 'Sep 10, 2025' or 'Sep 12, 2025, 8:27 AM' into a datetime.
-    Returns (dt, normalized_string) where normalized_string is original input (kept).
+    Returns (dt, normalized_string).
     """
     s_clean = s.strip()
     if not s_clean:
         return None, ""
-    # try with time
     for fmt in ("%b %d, %Y, %I:%M %p", "%b %d, %Y"):
         try:
             return datetime.strptime(s_clean, fmt), s_clean
         except Exception:
             continue
-    # fallback: keep original
     return None, s_clean
 
 def rows_to_records(driver, county_slug: str, max_parties: int, wait_secs: int, days_back: int):
     """
     Reads the table rows and aggregates by Doc Number.
+
+    Column map based on your HTML:
+      0 #, 1 image, 2 shielded, 3 Doc Number, 4 Party, 5 Book & Page,
+      6 Doc Date, 7 Recorded Date, 8 Doc Type, 9 Assoc Doc, 10 Legal Summary,
+      11 Consideration, 12 Additional Party, 13 Pages
     """
-    # Column map based on the HTML you posted:
-    # 0 #, 1 image, 2 shielded, 3 Doc Number, 4 Party, 5 Book & Page,
-    # 6 Doc Date, 7 Recorded Date, 8 Doc Type, 9 Assoc Doc, 10 Legal Summary,
-    # 11 Consideration, 12 Additional Party, 13 Pages
-    rows = WebDriverWait(driver, wait_secs).until(
-        EC.presence_of_all_elements_located((By.CSS_SELECTOR, "table[role='table'] tbody tr"))
-    )
+    # Ensure table is present (helpful on rescrapes/navigations)
+    _robust_wait_for_table(driver, max(wait_secs, 10))
+
+    rows = driver.find_elements(By.CSS_SELECTOR, "table[role='table'] tbody tr")
+    if not rows:
+        rows = driver.find_elements(By.CSS_SELECTOR, "table.p-datatable-table tbody tr")
+    if not rows:
+        rows = driver.find_elements(By.CSS_SELECTOR, "#pn_id_910-table tbody tr")
 
     bucket = {}  # key: Doc Number, value: dict record
     per_doc_parties = defaultdict(list)
@@ -234,7 +274,6 @@ def rows_to_records(driver, county_slug: str, max_parties: int, wait_secs: int, 
         try:
             tds = row.find_elements(By.TAG_NAME, "td")
             if len(tds) < 14:
-                # unexpected; skip
                 continue
 
             doc_number = safe_text(tds[3])
@@ -248,8 +287,8 @@ def rows_to_records(driver, county_slug: str, max_parties: int, wait_secs: int, 
             addl_party_text = extract_party_and_role(addl_party_cell)
 
             book_page = safe_text(tds[5]) or None
-            doc_date_raw = safe_text(tds[6])
-            recorded_date_raw = safe_text(tds[7])
+            doc_date_raw = safe_text(tds[6])           # <-- Doc Date (string, as shown in table)
+            recorded_date_raw = safe_text(tds[7])      # <-- Recorded Date (string, as shown in table)
             doc_type = safe_text(tds[8])
             assoc_doc = safe_text(tds[9])
             legal_summary = safe_text(tds[10])
@@ -257,9 +296,8 @@ def rows_to_records(driver, county_slug: str, max_parties: int, wait_secs: int, 
             pages = safe_text(tds[13])
 
             # optional filter by days-back using Doc Date
-            dt_doc, _doc_norm = parse_date_mmmd(doc_date_raw)
+            dt_doc, _ = parse_date_mmmd(doc_date_raw)
             if min_doc_date and dt_doc and (dt_doc.date() < min_doc_date):
-                # skip if older
                 continue
 
             # Initialize record if first time
@@ -268,7 +306,6 @@ def rows_to_records(driver, county_slug: str, max_parties: int, wait_secs: int, 
                 rec = OrderedDict()
                 rec["id"] = f"{county_slug}-{count}"
                 rec["Doc Number"] = doc_number
-                # Parties filled later after aggregation
                 for i in range(1, max_parties + 1):
                     rec[f"Party{i}"] = ""
                 rec["Book & Page"] = book_page
@@ -278,14 +315,13 @@ def rows_to_records(driver, county_slug: str, max_parties: int, wait_secs: int, 
                 rec["Assoc Doc"] = assoc_doc
                 rec["Legal Summary"] = legal_summary
                 rec["Consideration"] = consideration
-                # Pages numeric if possible
                 try:
                     rec["Pages"] = int(pages)
                 except Exception:
                     rec["Pages"] = pages
                 bucket[doc_number] = rec
 
-            # Merge fields that may be blank on first/other rows
+            # Merge blanks with non-blanks
             rec = bucket[doc_number]
             if not rec.get("Book & Page") and book_page:
                 rec["Book & Page"] = book_page
@@ -319,14 +355,11 @@ def rows_to_records(driver, county_slug: str, max_parties: int, wait_secs: int, 
         rec = bucket.get(doc_number)
         if not rec:
             continue
-        # keep only unique, cap to max_parties
         parties = parties[:max_parties]
         for i, p in enumerate(parties, start=1):
             rec[f"Party{i}"] = p
 
-    # stable order by id index
     records = list(bucket.values())
-    # Already assigned ids in increasing count order
     return records
 
 # --------------- Save ---------------
@@ -339,11 +372,9 @@ def save_json_csv(records, out_dir: str, county_slug: str):
     json_path = os.path.join(out_dir, f"{county_slug}.json")
     csv_path = os.path.join(out_dir, f"{county_slug}.csv")
 
-    # JSON
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(records, f, indent=2, ensure_ascii=False)
 
-    # CSV: union headers
     headers = OrderedDict()
     for r in records:
         for k in r.keys():
@@ -402,13 +433,11 @@ def main():
         )
         flow["steps"].append({"event": "first_pass_records", "count": len(records)})
 
-        # Optional: perform a "rescrape" run (e.g., change page/sort/filter in your app then scrape again)
-        # This is a stub; if your UI requires moving through county indices 1..N, add that navigation here.
+        # Optional additional passes (stub – you may need to navigate per index)
         if rescrape_list:
             for idx in rescrape_list:
                 flow["steps"].append({"event": "rescrape_begin", "index": idx})
-                # TODO: navigate to the selected county index here if applicable.
-                # After navigation finishes loading, call rows_to_records again and merge/replace logic as needed.
+                # TODO: navigate/select different county/index here if applicable.
                 more = rows_to_records(
                     driver=driver,
                     county_slug=args.county_slug,
@@ -416,7 +445,6 @@ def main():
                     wait_secs=args.wait,
                     days_back=args.days_back
                 )
-                # Merge: by Doc Number update
                 by_doc = {r["Doc Number"]: r for r in records}
                 for r in more:
                     by_doc[r["Doc Number"]] = r
@@ -432,6 +460,7 @@ def main():
 
     except Exception as e:
         log(f"FATAL: {e}")
+        _dump_debug_artifacts(driver) if driver else None
         flow["finished_ok"] = False
         flow["error"] = repr(e)
         raise
