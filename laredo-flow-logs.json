@@ -9,9 +9,7 @@
     "disconnected": "success"
   },
   "St Charles County": {
-    "connected": "success",
-    "data_json": "empty",
-    "disconnected": "success"
+    "connected": "failed"
   },
   "Jefferson County": {
     "connected": "success",
@@ -19,5 +17,5 @@
     "disconnected": "success"
   },
   "logout": "success",
-  "time_taken_sec": 147.98
+  "time_taken_sec": 162.65
 }
