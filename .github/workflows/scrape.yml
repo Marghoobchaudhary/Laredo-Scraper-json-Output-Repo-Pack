@@ -14,7 +14,7 @@ on:
       wait_seconds:
         description: "UI wait seconds"
         type: number
-        default: 12
+        default: 20      # a bit higher for reliability
       max_parties:
         description: "How many Party columns (Party1..N)"
         type: number
@@ -26,10 +26,10 @@ on:
       push_results:
         description: "Commit JSON/results back to repo"
         type: boolean
-        default: true   # <— now defaults to committing results
+        default: true
 
 permissions:
-  contents: write  # needed to push JSON files back to the repo
+  contents: write
 
 jobs:
   run-scraper:
@@ -47,7 +47,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
       - name: Cache pip
         uses: actions/cache@v4
@@ -67,12 +67,10 @@ jobs:
         with:
           chrome-version: stable
 
-      - name: Show Chrome version
-        run: google-chrome --version || chrome --version || true
-
-      - name: Ensure output directory exists
+      - name: Ensure output directory exists (and keep it in git)
         run: |
           mkdir -p "${{ env.OUT_DIR }}"
+          echo "keep" > "${{ env.OUT_DIR }}/.gitkeep"
 
       - name: Run scraper
         run: |
@@ -84,7 +82,19 @@ jobs:
             --max-parties ${{ inputs.max_parties }} \
             --rescrape-indices ${{ inputs.rescrape_indices }}
 
-      - name: Upload JSON and logs as artifact (for convenience)
+      - name: List outputs for debugging
+        if: always()
+        run: |
+          echo "=== GIT STATUS ==="
+          git status
+          echo "=== TREE ==="
+          ls -la
+          echo "=== OUT_DIR LISTING ==="
+          ls -la "${{ env.OUT_DIR }}" || true
+          echo "=== LOG PREVIEW ==="
+          tail -n 200 laredo.logs || true
+
+      - name: Upload JSON and logs as artifact (convenience)
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -97,15 +107,14 @@ jobs:
       - name: Commit results to repo
         if: ${{ inputs.push_results }}
         run: |
-          # Configure git
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          # Add files if they exist
-          git add "${{ env.OUT_DIR }}"/*.json 2>/dev/null || true
-          git add "${{ env.OUT_DIR }}"/*.csv 2>/dev/null || true
+          # Force-add even if patterns are in .gitignore
+          git add -f "${{ env.OUT_DIR }}/.gitkeep" 2>/dev/null || true
+          git add -f "${{ env.OUT_DIR }}"/*.json 2>/dev/null || true
+          git add -f "${{ env.OUT_DIR }}"/*.csv 2>/dev/null || true
           git add laredo-flow-logs.json laredo.logs 2>/dev/null || true
 
-          # Commit & push if there are changes
           git commit -m "chore: update Laredo JSON $(date -u +'%Y-%m-%dT%H:%M:%SZ')" || echo "No changes to commit"
           git push || true
