@@ -26,10 +26,10 @@ on:
       push_results:
         description: "Commit JSON/results back to repo"
         type: boolean
-        default: false
+        default: true   # <— now defaults to committing results
 
 permissions:
-  contents: write  # needed if push_results=true
+  contents: write  # needed to push JSON files back to the repo
 
 jobs:
   run-scraper:
@@ -70,6 +70,10 @@ jobs:
       - name: Show Chrome version
         run: google-chrome --version || chrome --version || true
 
+      - name: Ensure output directory exists
+        run: |
+          mkdir -p "${{ env.OUT_DIR }}"
+
       - name: Run scraper
         run: |
           echo "Rescrape indices: ${{ inputs.rescrape_indices }}"
@@ -80,7 +84,7 @@ jobs:
             --max-parties ${{ inputs.max_parties }} \
             --rescrape-indices ${{ inputs.rescrape_indices }}
 
-      - name: Upload JSON and logs
+      - name: Upload JSON and logs as artifact (for convenience)
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -93,9 +97,15 @@ jobs:
       - name: Commit results to repo
         if: ${{ inputs.push_results }}
         run: |
+          # Configure git
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add ${{ env.OUT_DIR }}/*.json ${{ env.OUT_DIR }}/*.csv 2>/dev/null || true
+
+          # Add files if they exist
+          git add "${{ env.OUT_DIR }}"/*.json 2>/dev/null || true
+          git add "${{ env.OUT_DIR }}"/*.csv 2>/dev/null || true
           git add laredo-flow-logs.json laredo.logs 2>/dev/null || true
-          git commit -m "chore: update laredo JSON $(date -u +'%Y-%m-%dT%H:%M:%SZ')" || echo "Nothing to commit"
-          git push
+
+          # Commit & push if there are changes
+          git commit -m "chore: update Laredo JSON $(date -u +'%Y-%m-%dT%H:%M:%SZ')" || echo "No changes to commit"
+          git push || true
