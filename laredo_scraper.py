@@ -3,11 +3,11 @@
 
 """
 Laredo scraper
-- Scrapes the PrimeNG table (role="table") you shared
-- Captures Doc Number, Party cells (with role chip), Book & Page, Doc Date, Recorded Date, Doc Type,
-  Assoc Doc, Legal Summary, Consideration, Additional Party, Pages
-- Aggregates duplicate Doc Numbers into a single record, filling Party1..PartyN
-- Robust handling of --rescrape-indices ("1 2", "1,2", "'1 2'") and optional --only-counties
+- Scrapes the PrimeNG table you shared (Doc Number, Parties, Book & Page, Doc Date, Recorded Date, Doc Type,
+  Assoc Doc, Legal Summary, Consideration, Additional Party, Pages)
+- Aggregates duplicate Doc Numbers into one record and fills Party1..N
+- Robust handling of rescrape indices and optional iframe/table selectors
+- Dumps HTML and screenshot on failure for quick diagnosis
 """
 
 import os
@@ -20,22 +20,20 @@ import argparse
 from datetime import datetime, timedelta
 from collections import OrderedDict, defaultdict
 
-# --- Selenium imports
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options as ChromeOptions
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException
-
-# --------------- Utility: logging ---------------
+from selenium.common.exceptions import TimeoutException, NoSuchFrameException, WebDriverException
 
 LOG_FILE = "laredo.logs"
 FLOW_LOG = "laredo-flow-logs.json"
 
+# ---------- logging ----------
 def log(msg: str):
-    timestamp = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
-    line = f"[{timestamp}] {msg}"
+    ts = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    line = f"[{ts}] {msg}"
     print(line, flush=True)
     try:
         with open(LOG_FILE, "a", encoding="utf-8") as f:
@@ -50,24 +48,13 @@ def write_flow_log(data):
     except Exception as e:
         log(f"Failed writing flow log: {e}")
 
-# --------------- CLI args ---------------
-
+# ---------- args ----------
 def parse_indices(s: str):
-    """
-    Accepts:
-      - '1 2'
-      - "1,2"
-      - "'1 2'"
-      - " 1   2 , 3 "
-    Returns [1, 2, 3] as ints
-    """
     if not s:
         return []
     s = s.strip()
-    # Remove wrapping quotes if present
     if (s.startswith("'") and s.endswith("'")) or (s.startswith('"') and s.endswith('"')):
         s = s[1:-1]
-    # Replace commas with spaces, then split
     parts = re.split(r"[\s,]+", s.strip())
     out = []
     for p in parts:
@@ -82,123 +69,144 @@ def parse_indices(s: str):
 def parse_list(s: str):
     if not s:
         return []
-    parts = re.split(r"[\s,]+", s.strip())
-    return [p for p in parts if p]
+    return [p for p in re.split(r"[\s,]+", s.strip()) if p]
 
 def get_args():
     ap = argparse.ArgumentParser()
     ap.add_argument("--headless", action="store_true", help="Run headless")
     ap.add_argument("--out", default=os.environ.get("OUT_DIR", "files"), help="Output directory")
-    ap.add_argument("--wait", type=int, default=15, help="UI wait seconds")
+    ap.add_argument("--wait", type=int, default=30, help="UI wait seconds")
     ap.add_argument("--max-parties", type=int, default=6, help="Number of Party fields (Party1..N)")
-    ap.add_argument("--days-back", type=int, default=2, help="Optional filter by Doc Date >= today - days-back")
+    ap.add_argument("--days-back", type=int, default=2, help="Skip Doc Date older than N days (0: disable)")
     ap.add_argument("--rescrape-indices", default="", help="Space/comma-separated indices for a second pass")
     ap.add_argument("--only-counties", default="", help="Optional filter: only scrape these county slugs")
     ap.add_argument("--hard-timeout", type=int, default=0, help="Hard kill after N seconds (0=disabled)")
-    ap.add_argument("--county-slug", default="st-charles-county", help="Slug used in output IDs and filenames")
-    ap.add_argument("--start-url", default=os.environ.get("LAREDO_URL", ""), help="Direct URL to the results page")
+    ap.add_argument("--county-slug", default="st-charles-county", help="Slug used in output filenames/ids")
+    ap.add_argument("--start-url", default=os.environ.get("LAREDO_URL", ""), help="Direct URL to results page")
+    ap.add_argument("--iframe-css", default="", help="CSS selector for iframe containing the table")
+    ap.add_argument("--table-css", default="", help="CSS selector for table (overrides auto detection)")
     return ap.parse_args()
 
-# --------------- Selenium setup ---------------
-
+# ---------- driver ----------
 def build_driver(headless: bool):
-    chrome_opts = ChromeOptions()
+    opts = ChromeOptions()
     if headless:
-        chrome_opts.add_argument("--headless=new")
-    chrome_opts.add_argument("--disable-gpu")
-    chrome_opts.add_argument("--no-sandbox")
-    chrome_opts.add_argument("--window-size=1920,1480")
-    chrome_opts.add_argument("--disable-dev-shm-usage")
-    chrome_opts.add_argument("--disable-blink-features=AutomationControlled")
-    chrome_prefs = {
+        opts.add_argument("--headless=new")
+    opts.add_argument("--disable-gpu")
+    opts.add_argument("--no-sandbox")
+    opts.add_argument("--window-size=1920,1480")
+    opts.add_argument("--disable-dev-shm-usage")
+    opts.add_argument("--disable-blink-features=AutomationControlled")
+    prefs = {
         "profile.default_content_setting_values.notifications": 2,
         "download.prompt_for_download": False,
     }
-    chrome_opts.add_experimental_option("prefs", chrome_prefs)
-
-    driver = webdriver.Chrome(options=chrome_opts)
+    opts.add_experimental_option("prefs", prefs)
+    driver = webdriver.Chrome(options=opts)
     driver.set_page_load_timeout(180)
     return driver
 
-# --------------- Login / Navigation (optional) ---------------
-
+# ---------- login (stub) ----------
 def maybe_login(driver, wait_secs: int):
-    username = os.environ.get("LAREDO_USERNAME", "")
-    password = os.environ.get("LAREDO_PASSWORD", "")
-    if not username or not password:
+    if not (os.environ.get("LAREDO_USERNAME") and os.environ.get("LAREDO_PASSWORD")):
         log("No LAREDO_USERNAME/PASSWORD in env — skipping login.")
         return
     try:
-        # Implement as needed for your site; left as stub.
         log("Login stub: implement if needed (skipped).")
     except Exception as e:
         log(f"Login skipped/failed: {e}")
 
-def _any_present(driver, selectors):
-    for sel in selectors:
-        els = driver.find_elements(By.CSS_SELECTOR, sel)
-        if els:
-            return True
-    return False
-
-def _robust_wait_for_table(driver, total_wait_s: int):
-    """
-    Tries multiple likely selectors, with gentle retries to allow Angular/PrimeNG to render.
-    Returns True if found, else False.
-    """
-    selectors = [
-        "table[role='table'] tbody tr",        # generic role table
-        "table.p-datatable-table tbody tr",    # PrimeNG class
-        "#pn_id_910-table tbody tr",           # the id seen in your HTML
-        "table[role='table']"                  # last resort: table exists (rows may be virtualized)
-    ]
-    end = time.time() + total_wait_s
-    attempt = 0
-    last_err = None
-    while time.time() < end:
-        attempt += 1
-        try:
-            if _any_present(driver, selectors):
-                return True
-        except Exception as e:
-            last_err = e
-        time.sleep(0.75)  # let the UI breathe
-        # small scroll to trigger lazy rendering if needed
-        try:
-            driver.execute_script("window.scrollTo(0, document.body.scrollHeight/3);")
-        except Exception:
-            pass
-    if last_err:
-        log(f"Last wait error: {last_err!r}")
-    return False
-
+# ---------- helpers ----------
 def _dump_debug_artifacts(driver):
     try:
-        with open("laredo_page.html", "w", encoding="utf-8") as f:
+        with open("laredo_page.html", "w", encoding="utf-8", errors="ignore") as f:
             f.write(driver.page_source)
-        log("Saved current page HTML to laredo_page.html")
+        log("Saved current page HTML -> laredo_page.html")
     except Exception as e:
         log(f"Failed to save HTML: {e}")
     try:
         driver.save_screenshot("laredo_page.png")
-        log("Saved screenshot to laredo_page.png")
+        log("Saved screenshot -> laredo_page.png")
     except Exception as e:
         log(f"Failed to save screenshot: {e}")
 
-def navigate_to_results(driver, start_url: str, wait_secs: int):
-    if start_url:
+def _switch_into_iframe(driver, iframe_css: str):
+    if not iframe_css:
+        return
+    try:
+        frame = WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, iframe_css))
+        )
+        driver.switch_to.frame(frame)
+        log(f"Switched into iframe: {iframe_css}")
+    except (TimeoutException, NoSuchFrameException) as e:
+        log(f"WARNING: iframe not found ({iframe_css}). Continuing in main context. ({e})")
+
+def _any_present(driver, selectors):
+    for sel in selectors:
+        if not sel:
+            continue
+        try:
+            if driver.find_elements(By.CSS_SELECTOR, sel):
+                return True
+        except Exception:
+            pass
+    return False
+
+def _scroll_breath(driver):
+    try:
+        driver.execute_script("window.scrollTo(0, 0);")
+        time.sleep(0.3)
+        driver.execute_script("window.scrollTo(0, document.body.scrollHeight/2);")
+        time.sleep(0.3)
+        driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+    except WebDriverException:
+        pass
+
+def _robust_wait_for_table(driver, table_css: str, total_wait_s: int):
+    # Your table id seen in the dump: #pn_id_910-table
+    fallbacks = [
+        table_css or "",                            # explicit override takes priority
+        "table[role='table'] tbody tr",             # generic
+        "table.p-datatable-table tbody tr",         # PrimeNG class
+        "#pn_id_910-table tbody tr",                # explicit id from sample
+        "table[role='table']"                       # at least the table exists
+    ]
+    deadline = time.time() + total_wait_s
+    last_err = None
+    while time.time() < deadline:
+        try:
+            if _any_present(driver, fallbacks):
+                return True
+        except Exception as e:
+            last_err = e
+        time.sleep(0.8)
+        _scroll_breath(driver)
+    if last_err:
+        log(f"Last wait error: {last_err!r}")
+    return False
+
+def navigate_to_results(driver, start_url: str, iframe_css: str, table_css: str, wait_secs: int):
+    if not start_url:
+        log("No --start-url provided; trying current page context.")
+    else:
         log(f"Opening start URL: {start_url}")
         driver.get(start_url)
-    else:
-        log("No --start-url provided; assuming we are already at results table.")
-    # First, give the app a moment to settle
-    time.sleep(2.0)
-    ok = _robust_wait_for_table(driver, max(wait_secs, 10))
-    if not ok:
-        _dump_debug_artifacts(driver)
-        raise TimeoutException("Results table not found after robust wait")
 
-# --------------- Table parsing ---------------
+    time.sleep(2)
+    _switch_into_iframe(driver, iframe_css)
+
+    if not _robust_wait_for_table(driver, table_css, max(wait_secs, 15)):
+        log("Table not found on first try; reloading once…")
+        try:
+            driver.refresh()
+            time.sleep(2)
+            _switch_into_iframe(driver, iframe_css)
+        except Exception as e:
+            log(f"Refresh failed: {e}")
+        if not _robust_wait_for_table(driver, table_css, max(wait_secs, 15)):
+            _dump_debug_artifacts(driver)
+            raise TimeoutException("Results table not found after robust wait (+ reload).")
 
 def safe_text(el):
     try:
@@ -207,17 +215,12 @@ def safe_text(el):
         return ""
 
 def extract_party_and_role(td_elem):
-    """
-    In each 'Party' cell, the name is a <span> and the role chip is another <span> containing 'GRANTOR'/'GRANTEE'
-    We return "NAME (ROLE)" if role chip exists; else just NAME.
-    """
     name = ""
     role = ""
     try:
         name = safe_text(td_elem.find_element(By.CSS_SELECTOR, "span"))
     except Exception:
         name = safe_text(td_elem)
-
     try:
         chip = td_elem.find_element(By.CSS_SELECTOR, ".party-chip")
         role_raw = safe_text(chip)
@@ -226,43 +229,47 @@ def extract_party_and_role(td_elem):
             role = m.group(1).upper()
     except Exception:
         role = ""
-
     return f"{name} ({role})" if name and role else name
 
 def parse_date_mmmd(s: str):
-    """
-    Parses 'Sep 10, 2025' or 'Sep 12, 2025, 8:27 AM' into a datetime.
-    Returns (dt, normalized_string).
-    """
-    s_clean = s.strip()
-    if not s_clean:
+    s = (s or "").strip()
+    if not s:
         return None, ""
     for fmt in ("%b %d, %Y, %I:%M %p", "%b %d, %Y"):
         try:
-            return datetime.strptime(s_clean, fmt), s_clean
+            return datetime.strptime(s, fmt), s
         except Exception:
             continue
-    return None, s_clean
+    return None, s
 
-def rows_to_records(driver, county_slug: str, max_parties: int, wait_secs: int, days_back: int):
-    """
-    Reads the table rows and aggregates by Doc Number.
-
-    Column map based on your HTML:
-      0 #, 1 image, 2 shielded, 3 Doc Number, 4 Party, 5 Book & Page,
-      6 Doc Date, 7 Recorded Date, 8 Doc Type, 9 Assoc Doc, 10 Legal Summary,
-      11 Consideration, 12 Additional Party, 13 Pages
-    """
-    # Ensure table is present (helpful on rescrapes/navigations)
-    _robust_wait_for_table(driver, max(wait_secs, 10))
-
-    rows = driver.find_elements(By.CSS_SELECTOR, "table[role='table'] tbody tr")
+def _find_rows(driver, table_css: str):
+    rows = []
+    # Use either explicit table selector or known fallbacks
+    if table_css:
+        # If a table selector was provided, try to hit its rows
+        if "tbody" in table_css:
+            rows = driver.find_elements(By.CSS_SELECTOR, table_css)
+        else:
+            rows = driver.find_elements(By.CSS_SELECTOR, f"{table_css} tbody tr")
+    if not rows:
+        rows = driver.find_elements(By.CSS_SELECTOR, "table[role='table'] tbody tr")
     if not rows:
         rows = driver.find_elements(By.CSS_SELECTOR, "table.p-datatable-table tbody tr")
     if not rows:
         rows = driver.find_elements(By.CSS_SELECTOR, "#pn_id_910-table tbody tr")
+    return rows
 
-    bucket = {}  # key: Doc Number, value: dict record
+def rows_to_records(driver, county_slug: str, max_parties: int, wait_secs: int, days_back: int, table_css: str):
+    _robust_wait_for_table(driver, table_css, max(wait_secs, 15))
+    rows = _find_rows(driver, table_css)
+
+    # In case of virtual scroll showing only a subset, try a little scroll to enforce rendering
+    if not rows:
+        _scroll_breath(driver)
+        time.sleep(1)
+        rows = _find_rows(driver, table_css)
+
+    bucket = {}
     per_doc_parties = defaultdict(list)
 
     min_doc_date = None
@@ -287,20 +294,18 @@ def rows_to_records(driver, county_slug: str, max_parties: int, wait_secs: int, 
             addl_party_text = extract_party_and_role(addl_party_cell)
 
             book_page = safe_text(tds[5]) or None
-            doc_date_raw = safe_text(tds[6])           # <-- Doc Date (string, as shown in table)
-            recorded_date_raw = safe_text(tds[7])      # <-- Recorded Date (string, as shown in table)
+            doc_date_raw = safe_text(tds[6])          # Doc Date
+            recorded_date_raw = safe_text(tds[7])     # Recorded Date
             doc_type = safe_text(tds[8])
             assoc_doc = safe_text(tds[9])
             legal_summary = safe_text(tds[10])
             consideration = safe_text(tds[11])
             pages = safe_text(tds[13])
 
-            # optional filter by days-back using Doc Date
             dt_doc, _ = parse_date_mmmd(doc_date_raw)
             if min_doc_date and dt_doc and (dt_doc.date() < min_doc_date):
                 continue
 
-            # Initialize record if first time
             if doc_number not in bucket:
                 count += 1
                 rec = OrderedDict()
@@ -321,7 +326,6 @@ def rows_to_records(driver, county_slug: str, max_parties: int, wait_secs: int, 
                     rec["Pages"] = pages
                 bucket[doc_number] = rec
 
-            # Merge blanks with non-blanks
             rec = bucket[doc_number]
             if not rec.get("Book & Page") and book_page:
                 rec["Book & Page"] = book_page
@@ -341,7 +345,6 @@ def rows_to_records(driver, county_slug: str, max_parties: int, wait_secs: int, 
                 except Exception:
                     rec["Pages"] = pages
 
-            # aggregate parties (dedupe, keep order)
             for p in [party_text, addl_party_text]:
                 p_norm = p.strip()
                 if p_norm and p_norm not in per_doc_parties[doc_number]:
@@ -350,25 +353,20 @@ def rows_to_records(driver, county_slug: str, max_parties: int, wait_secs: int, 
         except Exception as e:
             log(f"Row parse error: {e}")
 
-    # Fill Party1..PartyN
     for doc_number, parties in per_doc_parties.items():
         rec = bucket.get(doc_number)
         if not rec:
             continue
-        parties = parties[:max_parties]
-        for i, p in enumerate(parties, start=1):
+        for i, p in enumerate(parties[:max_parties], start=1):
             rec[f"Party{i}"] = p
 
-    records = list(bucket.values())
-    return records
+    return list(bucket.values())
 
-# --------------- Save ---------------
-
+# ---------- output ----------
 def ensure_out(out_dir: str):
     os.makedirs(out_dir, exist_ok=True)
 
 def save_json_csv(records, out_dir: str, county_slug: str):
-    ts = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
     json_path = os.path.join(out_dir, f"{county_slug}.json")
     csv_path = os.path.join(out_dir, f"{county_slug}.csv")
 
@@ -390,8 +388,7 @@ def save_json_csv(records, out_dir: str, county_slug: str):
     log(f"Wrote {json_path} and {csv_path}")
     return json_path, csv_path
 
-# --------------- Main flow ---------------
-
+# ---------- main ----------
 def main():
     args = get_args()
 
@@ -402,10 +399,12 @@ def main():
     rescrape_list = parse_indices(args.rescrape_indices)
     only_counties = parse_list(args.only_counties)
 
-    log(f"Params: headless={args.headless}, out={args.out}, wait={args.wait}, "
+    log(
+        f"Params: headless={args.headless}, out={args.out}, wait={args.wait}, "
         f"max_parties={args.max_parties}, days_back={args.days_back}, "
         f"rescrape_indices={rescrape_list}, only_counties={only_counties}, "
-        f"county_slug={args.county_slug}")
+        f"county_slug={args.county_slug}"
+    )
 
     ensure_out(args.out)
     flow = {
@@ -420,30 +419,30 @@ def main():
     try:
         driver = build_driver(args.headless)
         maybe_login(driver, args.wait)
-        navigate_to_results(driver, args.start_url, args.wait)
+        navigate_to_results(driver, args.start_url, args.iframe_css, args.table_css, args.wait)
 
-        # First pass scrape
         flow["steps"].append({"event": "first_pass_begin", "ts": datetime.utcnow().isoformat()})
         records = rows_to_records(
             driver=driver,
             county_slug=args.county_slug,
             max_parties=args.max_parties,
             wait_secs=args.wait,
-            days_back=args.days_back
+            days_back=args.days_back,
+            table_css=args.table_css,
         )
         flow["steps"].append({"event": "first_pass_records", "count": len(records)})
 
-        # Optional additional passes (stub – you may need to navigate per index)
         if rescrape_list:
             for idx in rescrape_list:
                 flow["steps"].append({"event": "rescrape_begin", "index": idx})
-                # TODO: navigate/select different county/index here if applicable.
+                # TODO: navigate/select different county/index if your UI requires.
                 more = rows_to_records(
                     driver=driver,
                     county_slug=args.county_slug,
                     max_parties=args.max_parties,
                     wait_secs=args.wait,
-                    days_back=args.days_back
+                    days_back=args.days_back,
+                    table_css=args.table_css,
                 )
                 by_doc = {r["Doc Number"]: r for r in records}
                 for r in more:
@@ -451,7 +450,6 @@ def main():
                 records = list(by_doc.values())
                 flow["steps"].append({"event": "rescrape_records", "index": idx, "count": len(more)})
 
-        # Save
         json_path, csv_path = save_json_csv(records, args.out, args.county_slug)
         flow["finished_ok"] = True
         flow["records"] = len(records)
@@ -460,7 +458,8 @@ def main():
 
     except Exception as e:
         log(f"FATAL: {e}")
-        _dump_debug_artifacts(driver) if driver else None
+        if driver:
+            _dump_debug_artifacts(driver)
         flow["finished_ok"] = False
         flow["error"] = repr(e)
         raise
