@@ -20,11 +20,10 @@ from selenium.common.exceptions import StaleElementReferenceException
 class LaredoScraper:
     """
     Scrapes laredoanywhere.com, intercepts search API results,
-    enriches with doc details, and writes JSON files (always writes a per-county file).
-    Also drops debug artifacts for troubleshooting in CI.
+    enriches with doc details, and writes per-county JSON files.
     """
 
-    def __init__(self, out_dir="files", headless=True, wait_seconds=30, max_parties=6):
+    def __init__(self, out_dir="files", headless=True, wait_seconds=30, max_parties=6, days_back=2):
         load_dotenv()
         self.username = os.getenv("LAREDO_USERNAME", "")
         self.password = os.getenv("LAREDO_PASSWORD", "")
@@ -36,6 +35,7 @@ class LaredoScraper:
         self.flow_start_time = time.time()
         self.WAIT_DURATION = wait_seconds
         self.max_parties = max_parties
+        self.days_back = max(0, int(days_back))
 
         # Chrome setup
         chrome_options = webdriver.ChromeOptions()
@@ -106,9 +106,15 @@ class LaredoScraper:
                 time.sleep(1)
         return None
 
-    def _get_week_start_mmddyyyy(self):
-        dt = datetime.today() - timedelta(days=6)
+    @staticmethod
+    def _fmt_mmddyyyy(dt: datetime) -> str:
         return dt.strftime("%m%d%Y")
+
+    def _start_date_str(self) -> str:
+        return self._fmt_mmddyyyy(datetime.today() - timedelta(days=self.days_back))
+
+    def _end_date_str(self) -> str:
+        return self._fmt_mmddyyyy(datetime.today())
 
     # ---------- Network interception ----------
     def _intercept_after_search(self):
@@ -253,16 +259,28 @@ class LaredoScraper:
             self.flow_log["logout"] = "failed"
 
     def _fill_form(self, county_name, second_pass=False):
+        """Set start date (N days back) and end date (today). Keep other filters."""
         try:
             time.sleep(2)
+            # Start Date
             start = self._wait_for("//input[@placeholder='Enter a start date']")
             if start:
                 try:
                     start.clear()
                 except Exception:
                     pass
-                start.send_keys(self._get_week_start_mmddyyyy())
+                start.send_keys(self._start_date_str())
 
+            # End Date (if present)
+            end = self._wait_for("//input[@placeholder='Enter an end date']")
+            if end:
+                try:
+                    end.clear()
+                except Exception:
+                    pass
+                end.send_keys(self._end_date_str())
+
+            # Doc type dropdown + search filter (unchanged logic)
             dd = self.wait.until(
                 EC.visibility_of_element_located(
                     (By.XPATH, "//p-dropdown[@formcontrolname='selectedDocumentType']")
@@ -274,7 +292,6 @@ class LaredoScraper:
                     (By.XPATH, "//input[contains(@class, 'p-dropdown-filter')]")
                 )
             )
-            # clear any existing text
             try:
                 search.clear()
             except Exception:
@@ -303,6 +320,84 @@ class LaredoScraper:
         except Exception as e:
             self._write_log(f"Fill form error: {e}")
 
+    # ---------- Date parsing helpers ----------
+    @staticmethod
+    def _try_parse_date(s: str, fmts):
+        for fmt in fmts:
+            try:
+                return datetime.strptime(s, fmt)
+            except Exception:
+                continue
+        return None
+
+    def _extract_doc_date(self, doc) -> str:
+        # Try several fields commonly observed
+        candidates = [
+            doc.get("docDate"),
+            doc.get("docDateDisplay"),
+            doc.get("documentDate"),
+            doc.get("documentDateDisplay"),
+            doc.get("docDateStr"),
+        ]
+        for val in candidates:
+            if not val:
+                continue
+            # Try ISO first
+            if isinstance(val, str) and "T" in val:
+                dt = self._try_parse_date(val, ["%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%S.%f"])
+                if dt:
+                    return dt.strftime("%m/%d/%Y")
+            # Try display formats
+            if isinstance(val, str):
+                dt = self._try_parse_date(
+                    val,
+                    [
+                        "%b %d, %Y",
+                        "%m/%d/%Y",
+                        "%b %d, %Y, %I:%M %p",
+                        "%Y-%m-%d",
+                    ],
+                )
+                if dt:
+                    return dt.strftime("%m/%d/%Y")
+        return ""
+
+    def _extract_recorded_date(self, doc) -> str:
+        candidates = [
+            doc.get("docRecordedDateTime"),
+            doc.get("docRecordedDateTimeDisplay"),
+            doc.get("recordedDate"),
+            doc.get("recordedDateDisplay"),
+            doc.get("recordedDateStr"),
+        ]
+        for val in candidates:
+            if not val:
+                continue
+            # ISO
+            if isinstance(val, str) and "T" in val:
+                dt = self._try_parse_date(val, ["%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%S.%f"])
+                if dt:
+                    return dt.strftime("%m/%d/%Y, %I:%M %p")
+            # Display
+            if isinstance(val, str):
+                dt = self._try_parse_date(
+                    val,
+                    [
+                        "%b %d, %Y, %I:%M %p",
+                        "%m/%d/%Y, %I:%M %p",
+                        "%b %d, %Y",
+                        "%m/%d/%Y",
+                        "%Y-%m-%d",
+                    ],
+                )
+                if dt:
+                    # If time not present, just output date w/ time missing
+                    if any(fmt in ["%b %d, %Y, %I:%M %p", "%m/%d/%Y, %I:%M %p"] for fmt in ["%b %d, %Y, %I:%M %p", "%m/%d/%Y, %I:%M %p"]):
+                        return dt.strftime("%m/%d/%Y, %I:%M %p")
+                    # else date only
+                    return dt.strftime("%m/%d/%Y")
+        return ""
+
     # ---------- Data shaping ----------
     def _clean_results(self, county_slug, docs_list):
         out = []
@@ -316,27 +411,14 @@ class LaredoScraper:
                         f" ({doc.get('partyOneType')})" if doc.get("partyOneType") else ""
                     ),
                     "Book & Page": doc.get("bookPage", ""),
-                    "Doc Date": "",
-                    "Recorded Date": "",
+                    "Doc Date": self._extract_doc_date(doc),
+                    "Recorded Date": self._extract_recorded_date(doc),
                     "Doc Type": doc.get("docType", ""),
                     "Assoc Doc": doc.get("assocDocSummary", ""),
                     "Legal Summary": doc.get("legalSummary", ""),
                     "Consideration": f"${doc['consideration']}" if doc.get("consideration") is not None else "",
                     "Pages": doc.get("pages", ""),
                 }
-                # Parse dates
-                if doc.get("docDate"):
-                    try:
-                        dt = datetime.strptime(doc["docDate"], "%Y-%m-%dT%H:%M:%S")
-                        nd["Doc Date"] = dt.strftime("%m/%d/%Y")
-                    except Exception:
-                        pass
-                if doc.get("docRecordedDateTime"):
-                    try:
-                        dt = datetime.strptime(doc["docRecordedDateTime"], "%Y-%m-%dT%H:%M:%S")
-                        nd["Recorded Date"] = dt.strftime("%m/%d/%Y, %I:%M %p")
-                    except Exception:
-                        pass
                 out.append(nd)
             except Exception as e:
                 self._write_log(f"Clean doc error: {e}")
@@ -416,9 +498,9 @@ class LaredoScraper:
                 if k == "Party":
                     add_series(self.max_parties, k, linked, nr)
                 elif k == "addresses":
-                    add_series(max_addr, k, linked, nr)
+                    add_series(max(max_addr, 0), k, linked, nr)
                 elif k == "parcels":
-                    add_series(max_parc, k, linked, nr)
+                    add_series(max(max_parc, 0), k, linked, nr)
                 else:
                     nr[k] = v
             out.append(nr)
@@ -516,12 +598,17 @@ if __name__ == "__main__":
     parser.add_argument("--headless", action="store_true", help="Run headless")
     parser.add_argument("--wait", type=int, default=30, help="Wait seconds for UI")
     parser.add_argument("--max-parties", type=int, default=6)
+    parser.add_argument("--days-back", type=int, default=2, help="Start date = today - N days; end date = today")
     parser.add_argument(
         "--rescrape-indices", nargs="*", type=int, default=[1, 2], help="County indices to scrape twice"
     )
     args = parser.parse_args()
 
     scraper = LaredoScraper(
-        out_dir=args.out, headless=args.headless, wait_seconds=args.wait, max_parties=args.max_parties
+        out_dir=args.out,
+        headless=args.headless,
+        wait_seconds=args.wait,
+        max_parties=args.max_parties,
+        days_back=args.days_back,
     )
     scraper.run(rescrape_indices=set(args.rescrape_indices))
