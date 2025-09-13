@@ -1,46 +1,59 @@
-name: Scrape Laredo JSON
+name: Laredo Scraper
 
 on:
   workflow_dispatch:
     inputs:
       headless:
-        description: "Run Chrome headless"
+        description: "Run headless"
         type: boolean
         default: true
+      out_dir:
+        description: "Output directory"
+        type: string
+        default: "files"
       wait_seconds:
-        description: "UI wait timeout per wait (seconds)"
+        description: "UI wait seconds"
         type: number
-        default: 25
+        default: 20
       max_parties:
-        description: "Max Party columns to flatten"
+        description: "How many Party columns (Party1..N)"
         type: number
         default: 6
       rescrape_indices:
-        description: "County indices to rescrape once (space separated)"
+        description: "Space-separated county indices for second pass (e.g. '1 2')"
         type: string
         default: "1 2"
       only_counties:
-        description: "Comma-separated county names to scrape (exact text on the page). Example: St Charles County"
+        description: "Comma-separated county names (exact as shown). Ex: St Charles County"
         type: string
         default: "St Charles County"
+      days_back:
+        description: "Start = today - N days; End = today"
+        type: number
+        default: 2
       hard_timeout_sec:
         description: "Hard stop for the whole scraper (seconds)"
         type: number
         default: 720
+      push_results:
+        description: "Commit JSON/results back to repo"
+        type: boolean
+        default: true
 
 permissions:
   contents: write
 
-env:
-  OUT_DIR: files
-
 jobs:
-  scrape:
+  run-scraper:
     runs-on: ubuntu-latest
-    timeout-minutes: 30  # job-level guard
+    timeout-minutes: 60
+    env:
+      LAREDO_USERNAME: ${{ secrets.LAREDO_USERNAME }}
+      LAREDO_PASSWORD: ${{ secrets.LAREDO_PASSWORD }}
+      OUT_DIR: ${{ inputs.out_dir }}
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Set up Python
@@ -48,72 +61,80 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install Google Chrome
-        uses: browser-actions/setup-chrome@v1
+      - name: Cache pip
+        uses: actions/cache@v4
         with:
-          chrome-version: stable
-
-      - name: Verify Chrome
-        run: |
-          which google-chrome || true
-          google-chrome --version || true
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Create .env from GitHub Secrets
+      - name: Setup Chrome
+        uses: browser-actions/setup-chrome@v1
+        with:
+          chrome-version: stable
+
+      - name: Ensure output directory exists (and keep it in git)
         run: |
-          : "${{ secrets.LAREDO_USERNAME?Need LAREDO_USERNAME secret set }}"
-          : "${{ secrets.LAREDO_PASSWORD?Need LAREDO_PASSWORD secret set }}"
-          echo "LAREDO_USERNAME=${{ secrets.LAREDO_USERNAME }}" > .env
-          echo "LAREDO_PASSWORD=${{ secrets.LAREDO_PASSWORD }}" >> .env
+          mkdir -p "${OUT_DIR}"
+          echo "keep" > "${OUT_DIR}/.gitkeep"
 
       - name: Run scraper
         timeout-minutes: 20
+        shell: bash
         run: |
-          echo "Rescrape indices: ${{ inputs.rescrape_indices }}"
+          set -euo pipefail
+          echo "Rescrape indices: '${{ inputs.rescrape_indices }}'"
+          HEADLESS_FLAG=""
+          if [ "${{ inputs.headless }}" = "true" ]; then
+            HEADLESS_FLAG="--headless"
+          fi
+
           python laredo_scraper.py \
-            ${{ inputs.headless && '--headless' || '' }} \
-            --out "${{ env.OUT_DIR }}" \
+            ${HEADLESS_FLAG} \
+            --out "${OUT_DIR}" \
             --wait ${{ inputs.wait_seconds }} \
             --max-parties ${{ inputs.max_parties }} \
-            --days-back 2 \
-            --rescrape-indices ${{ inputs.rescrape_indices }} \
+            --days-back ${{ inputs.days_back }} \
+            --hard-timeout ${{ inputs.hard_timeout_sec }} \
             --only-counties "${{ inputs.only_counties }}" \
-            --hard-timeout ${{ inputs.hard_timeout_sec }}
+            --rescrape-indices ${{ inputs.rescrape_indices }}
 
-      - name: List output files
+      - name: List outputs for debugging
         if: always()
         run: |
-          echo "OUT_DIR=${{ env.OUT_DIR }}"
-          ls -la "${{ env.OUT_DIR }}" || true
-          ls -la || true
+          echo "=== GIT STATUS ==="
+          git status
+          echo "=== TREE ==="
+          ls -la
+          echo "=== OUT_DIR LISTING (${OUT_DIR}) ==="
+          ls -la "${OUT_DIR}" || true
+          echo "=== LOG PREVIEW ==="
+          tail -n 200 laredo.logs || true
 
-      - name: Upload debug artifacts
+      - name: Upload JSON and logs as artifact (convenience)
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: scrape-debug
+          name: laredo-results
           path: |
-            ${{ env.OUT_DIR }}/*.png
-            ${{ env.OUT_DIR }}/*.html
-            ${{ env.OUT_DIR }}/*.json
+            ${OUT_DIR}/
             laredo-flow-logs.json
             laredo.logs
           if-no-files-found: warn
 
-      - name: Commit & push JSON results
-        if: ${{ success() }}
+      - name: Commit results to repo
+        if: ${{ inputs.push_results }}
         run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add ${{ env.OUT_DIR }}/*.json || true
-          git add laredo-flow-logs.json || true
-          git add laredo.logs || true
-          if ! git diff --cached --quiet; then
-            git commit -m "Update scraped JSON ($(date -u +'%Y-%m-%dT%H:%M:%SZ'))"
-            git push || echo "Push failed."
-          else
-            echo "No changes to commit."
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f "${OUT_DIR}/.gitkeep" 2>/dev/null || true
+          git add -f "${OUT_DIR}"/*.json 2>/dev/null || true
+          git add laredo-flow-logs.json laredo.logs 2>/dev/null || true
+          git commit -m "chore: update Laredo JSON $(date -u +'%Y-%m-%dT%H:%M:%SZ')" || echo "No changes to commit"
+          git push || true
