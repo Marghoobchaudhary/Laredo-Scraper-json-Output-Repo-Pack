@@ -1,671 +1,730 @@
-import argparse
-import json
 import os
 import time
+import json
+import csv
+import argparse
 from datetime import datetime, timedelta
-from pathlib import Path
 
 import requests
-from dotenv import load_dotenv
 from slugify import slugify
 
 from selenium import webdriver
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.common.action_chains import ActionChains
 from selenium.common.exceptions import StaleElementReferenceException, TimeoutException
 
 
-class LaredoScraper:
-    """
-    Scrapes laredoanywhere.com search results and writes per-county JSON files.
-    - Date window: start = today - N days, end = today
-    - Fallback dates from the visible table when API misses them
-    - Can limit to specific counties and enforce a hard runtime timeout
-    """
-
-    def __init__(self, out_dir="files", headless=True, wait_seconds=25,
-                 max_parties=6, days_back=2, hard_timeout_sec=900,
-                 only_counties=None):
-        load_dotenv()
-        self.username = os.getenv("LAREDO_USERNAME", "")
-        self.password = os.getenv("LAREDO_PASSWORD", "")
-        if not self.username or not self.password:
-            raise RuntimeError("Missing LAREDO_USERNAME/LAREDO_PASSWORD")
-
+class Laredo:
+    def __init__(
+        self,
+        headless=True,
+        out_dir="files",
+        wait_seconds=20,
+        max_parties=6,
+        days_back=2,
+        rescrape_indices=None,
+        only_counties=None,
+        hard_timeout=None,
+    ):
         self.flow_start_time = time.time()
-        self.WAIT_DURATION = wait_seconds
-        self.max_parties = max_parties
-        self.days_back = max(0, int(days_back))
-        self.hard_timeout_sec = max(60, int(hard_timeout_sec))
-        self.only_counties = set([c.strip() for c in (only_counties or []) if c.strip()])
+        self.WAIT_DURATION = int(wait_seconds)
+        self.wait = None
+        self.OUTPUT_DIRECTORY = out_dir
+        os.makedirs(self.OUTPUT_DIRECTORY, exist_ok=True)
 
-        # Chrome setup (faster starts, eager page load)
+        self.max_parties = int(max_parties)
+        self.days_back = int(days_back)
+        self.rescrape_indices = (
+            [int(i) for i in str(rescrape_indices).split()] if rescrape_indices else []
+        )
+        # If provided, only scrape these county names (exact, comma-separated)
+        self.only_counties = (
+            [c.strip() for c in only_counties.split(",")] if only_counties else None
+        )
+        self.hard_timeout = int(hard_timeout) if hard_timeout else None
+
+        # Selenium setup
         chrome_options = webdriver.ChromeOptions()
         if headless:
             chrome_options.add_argument("--headless=new")
         chrome_options.add_argument("--disable-gpu")
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
-        chrome_options.add_argument("--window-size=1600,1200")
-        chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-        chrome_options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                                    "Chrome/120.0.0.0 Safari/537.36")
         chrome_options.set_capability("goog:loggingPrefs", {"performance": "ALL"})
-        chrome_options.set_capability("pageLoadStrategy", "eager")  # important
-
         self.driver = webdriver.Chrome(options=chrome_options)
+        self.driver.maximize_window()
         self.driver.execute_cdp_cmd("Network.enable", {})
+
+        self.action_chains = ActionChains(self.driver)
         self.wait = WebDriverWait(self.driver, self.WAIT_DURATION)
-        self.actions = ActionChains(self.driver)
-
-        self.OUT_DIR = out_dir
-        Path(self.OUT_DIR).mkdir(parents=True, exist_ok=True)
         self.flow_log = {}
-        self.combined_records_all = []
 
-    # ---------- Utility ----------
-    def _now_exceeded(self) -> bool:
-        return (time.time() - self.flow_start_time) >= self.hard_timeout_sec
+    # ----------------- utilities & logging -----------------
 
-    def _save_screenshot(self, name: str):
+    def __write_flow_logs(self):
         try:
-            path = os.path.join(self.OUT_DIR, f"{name}.png")
-            self.driver.save_screenshot(path)
-        except Exception:
-            pass
-
-    def _save_html(self, name: str):
-        try:
-            path = os.path.join(self.OUT_DIR, f"{name}.html")
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(self.driver.page_source)
-        except Exception:
-            pass
-
-    def _write_flow_logs(self):
-        try:
-            with open("laredo-flow-logs.json", "w", encoding="utf-8") as f:
-                json.dump(self.flow_log, f, ensure_ascii=False, indent=2)
+            with open("laredo-flow-logs.json", "w") as f:
+                f.write(json.dumps(self.flow_log, indent=2))
         except Exception as e:
-            self._write_log(f"Error writing flow logs: {e}")
+            print("Error in __write_flow_logs():", e)
+            self.__write_log(e)
 
-    def _write_log(self, msg):
+    def __write_log(self, msg):
         try:
-            with open("laredo.logs", "a", encoding="utf-8") as f:
+            with open("laredo.logs", "a") as f:
                 f.write(str(msg) + "\n")
-        except Exception:
-            pass
+        except Exception as e:
+            print("Error in write_log():", e)
 
-    def _wait_for(self, xpath, multiple=False, timeout=None):
-        timeout = timeout or self.WAIT_DURATION
+    def __wait_for_element(self, xpath, multiple=False):
+        for _ in range(5):
+            try:
+                if multiple:
+                    return self.wait.until(
+                        EC.visibility_of_all_elements_located((By.XPATH, xpath))
+                    )
+                else:
+                    return self.wait.until(
+                        EC.visibility_of_element_located((By.XPATH, xpath))
+                    )
+            except TimeoutException:
+                print(f"'{xpath}' not found yet, retrying...")
+        return False
+
+    # ----------------- auth & navigation -----------------
+
+    def __login(self):
+        is_logged_in = False
         try:
-            if multiple:
-                return WebDriverWait(self.driver, timeout).until(
-                    EC.visibility_of_all_elements_located((By.XPATH, xpath))
-                )
-            return WebDriverWait(self.driver, timeout).until(
-                EC.visibility_of_element_located((By.XPATH, xpath))
+            self.driver.get("https://www.laredoanywhere.com/")
+            username = self.__wait_for_element(
+                "//input[@id='username']", multiple=False
             )
-        except TimeoutException:
-            return None
+            if not username:
+                return False
 
-    @staticmethod
-    def _fmt_mmddyyyy(dt: datetime) -> str:
-        return dt.strftime("%m%d%Y")
+            username_val = os.getenv("LAREDO_USERNAME") or "YOUGOGIRL"
+            password_val = os.getenv("LAREDO_PASSWORD") or "WEINERT!"
 
-    def _start_date_str(self) -> str:
-        return self._fmt_mmddyyyy(datetime.today() - timedelta(days=self.days_back))
+            username.send_keys(username_val)
+            password = self.__wait_for_element("//input[@id='password']", False)
+            password.send_keys(password_val)
+            login = self.__wait_for_element("//button", False)
+            login.click()
+            time.sleep(8)
+            if self.__wait_for_element(
+                "//div[contains(@class, 'button-wrapper')]", multiple=False
+            ):
+                is_logged_in = True
+                self.flow_log["login_status"] = "success"
+        except Exception as e:
+            print("Error in login()", e)
+            self.__write_log(e)
+            self.flow_log["login_status"] = "failed"
+        return is_logged_in
 
-    def _end_date_str(self) -> str:
-        return self._fmt_mmddyyyy(datetime.today())
+    def __logout(self):
+        try:
+            logout_buttons = self.__wait_for_element(
+                "//button[contains(@class,'nav-button')]", True
+            )
+            if logout_buttons:
+                logout_button = list(logout_buttons)[-1]
+                if "Sign out" in logout_button.text:
+                    logout_button.click()
+                    time.sleep(3)
+                    yes_button = self.__wait_for_element(
+                        "//button[contains(@class,'mobile-dialog-button')]", False
+                    )
+                    if yes_button:
+                        yes_button.click()
+                    self.flow_log["logout"] = "success"
+                    time.sleep(3)
+        except Exception as e:
+            print("Error in logout()", e)
+            self.__write_log(e)
+            self.flow_log["logout"] = "failed"
 
-    # ---------- Network interception ----------
-    def _intercept_after_search(self, poll_sec=8):
+    def __get_counties(self):
+        counties = []
+        try:
+            counties = self.__wait_for_element(
+                "//div[contains(@class, 'button-wrapper')]", True
+            )
+        except Exception as e:
+            print("Error in __get_counties():", e)
+            self.__write_log(e)
+        return list(counties) if counties else []
+
+    def __connect_county(self, county_name, county_index):
+        try:
+            counties = self.__get_counties()
+            if county_index >= len(counties):
+                raise Exception(f"County index {county_index} out of range")
+            county = counties[county_index]
+
+            for _ in range(3):
+                try:
+                    time.sleep(3)
+                    self.action_chains.move_to_element(county).perform()
+                    county.click()
+                    disconnect_button = self.wait.until(
+                        EC.visibility_of_element_located(
+                            (By.XPATH, "//button[@type='button']")
+                        )
+                    )
+                    if disconnect_button.text.strip() == "Disconnect":
+                        self.flow_log[county_name] = {"connected": "success"}
+                        return True
+                except StaleElementReferenceException:
+                    time.sleep(2)
+                    counties = self.__get_counties()
+                    county = counties[county_index]
+            raise Exception("Failed to connect after retries")
+        except Exception as e:
+            print(f"Error in connect_county() for {county_name}: {e}")
+            self.__write_log(e)
+            self.flow_log[county_name] = {"connected": "failed"}
+            return False
+
+    def __disconnect_county(self, county_name):
+        try:
+            disconnect_button = self.__wait_for_element(
+                "//button[@type='button']", False
+            )
+            if disconnect_button and disconnect_button.text.strip() == "Disconnect":
+                disconnect_button.click()
+                self.flow_log[county_name]["disconnected"] = "success"
+                time.sleep(4)
+        except Exception as e:
+            print("Error in disconnect_county()", e)
+            self.__write_log(e)
+            self.flow_log[county_name]["disconnected"] = "failed"
+
+    def __close_popup(self):
+        try:
+            time.sleep(2)
+            close_popup = self.__wait_for_element(
+                "//i[contains(@class, 'fa-xmark')]", False
+            )
+            if close_popup:
+                close_popup.click()
+        except Exception as e:
+            print("Error in close_popup()", e)
+            self.__write_log(e)
+
+    # ----------------- search & intercept -----------------
+
+    def __get_start_date_mmddyyyy(self):
+        # start date is today - N days, end date is today (UI defaults end to today)
+        start_dt = datetime.today() - timedelta(days=self.days_back)
+        return start_dt.strftime("%m%d%Y")
+
+    def __fill_form(self, county_name, second_pass=False):
+        try:
+            time.sleep(2)
+            start_date = self.__wait_for_element(
+                "//input[@placeholder='Enter a start date']", False
+            )
+            if start_date:
+                start_date.clear()
+                start_date.send_keys(self.__get_start_date_mmddyyyy())
+
+            time.sleep(1)
+            search_dropdown_div = self.wait.until(
+                EC.visibility_of_element_located(
+                    (By.XPATH, "//p-dropdown[@formcontrolname='selectedDocumentType']")
+                )
+            )
+            search_dropdown_div.click()
+            time.sleep(1)
+
+            search_input_field = self.wait.until(
+                EC.visibility_of_element_located(
+                    (By.XPATH, "//input[contains(@class, 'p-dropdown-filter')]")
+                )
+            )
+            # Use existing logic + your special cases
+            if second_pass:
+                search_input_field.send_keys("RESOLUTION")
+            else:
+                if county_name.strip() == "Jefferson County":
+                    search_input_field.send_keys("APPOINTMENT")
+                else:
+                    search_input_field.send_keys("Successor")
+            time.sleep(1)
+            first_search_option = self.wait.until(
+                EC.visibility_of_element_located((By.XPATH, "//li[@role='option']"))
+            )
+            first_search_option.click()
+
+            time.sleep(1)
+            run_search_button = self.wait.until(
+                EC.visibility_of_element_located(
+                    (By.XPATH, "//button[contains(@class,'run-btn')]")
+                )
+            )
+            run_search_button.click()
+            # allow results to render
+            time.sleep(max(6, self.WAIT_DURATION // 2))
+        except Exception as e:
+            print("Error in __fill_form()", e)
+            self.__write_log(e)
+
+    def __intercept(self):
         """
-        Poll performance logs up to poll_sec seconds for the advance/search response.
+        Read Chrome performance logs to capture:
+          - the 'advance/search' JSON response (docs list)
+          - the Authorization header (bearer) used by the site (if visible)
         """
         data = {"docs_list": [], "auth_token": ""}
-        end_t = time.time() + max(4, poll_sec)
-        seen_auth = False
-        while time.time() < end_t:
+        try:
             logs = self.driver.get_log("performance")
             for entry in logs:
                 try:
                     message = json.loads(entry["message"])["message"]
-                    m = message.get("method")
-
-                    if m == "Network.responseReceived":
+                    method = message.get("method", "")
+                    if method == "Network.responseReceived":
                         params = message.get("params", {})
                         url = params.get("response", {}).get("url", "")
                         if url.endswith("api/advance/search"):
-                            req_id = params.get("requestId")
-                            resp = self.driver.execute_cdp_cmd(
-                                "Network.getResponseBody", {"requestId": req_id}
+                            request_id = params.get("requestId")
+                            body = self.driver.execute_cdp_cmd(
+                                "Network.getResponseBody", {"requestId": request_id}
                             )
-                            body = resp.get("body")
-                            if body:
-                                docs_data = json.loads(body)
-                                if "documentList" in docs_data:
-                                    data["docs_list"] = docs_data["documentList"]
+                            response_body = body.get("body")
+                            docs_data = json.loads(response_body) if response_body else {}
+                            if "documentList" in docs_data:
+                                data["docs_list"] = docs_data["documentList"]
 
-                    elif m == "Network.requestWillBeSent" and not seen_auth:
-                        headers = message.get("params", {}).get("request", {}).get("headers", {})
+                    elif method == "Network.requestWillBeSent":
+                        params = message.get("params", {})
+                        headers = params.get("request", {}).get("headers", {})
+                        # Sometimes the Authorization header shows up here
                         auth = headers.get("Authorization")
-                        if auth:
+                        if auth and not data["auth_token"]:
                             data["auth_token"] = auth
-                            seen_auth = True
                 except Exception as ex:
-                    self._write_log(f"Perf log parse error: {ex}")
-
-            if data["docs_list"]:
-                break
-            time.sleep(0.5)
-
-        # Save debug
-        try:
-            with open(os.path.join(self.OUT_DIR, "_debug_last_search.json"), "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-        except Exception:
-            pass
-
+                    self.__write_log(f"Error parsing log entry: {ex}")
+        except Exception as e:
+            self.__write_log(f"Error in __intercept(): {e}")
         return data
 
-    # ---------- Page flows ----------
-    def _login(self):
-        try:
-            self.driver.get("https://www.laredoanywhere.com/")
-            u = self._wait_for("//input[@id='username']", timeout=20)
-            if not u:
-                self._save_screenshot("debug_login_missing_username")
-                self._save_html("debug_login_missing_username")
-                return False
-            u.send_keys(self.username)
-            p = self._wait_for("//input[@id='password']", timeout=10)
-            p.send_keys(self.password)
-            btn = self._wait_for("//button", timeout=10)
-            btn.click()
-            # wait until county tiles visible
-            ok = self._wait_for("//div[contains(@class, 'button-wrapper')]", timeout=25)
-            self._save_screenshot("debug_login")
-            self._save_html("debug_login")
-            self.flow_log["login_status"] = "success" if ok else "failed"
-            return ok is not None
-        except Exception as e:
-            self._write_log(f"Login error: {e}")
-            self.flow_log["login_status"] = "failed"
-            return False
+    # ----------------- NEW: read dates from the table -----------------
 
-    def _all_county_names(self):
-        names = []
-        try:
-            spans = self.driver.find_elements(By.XPATH, '//span[contains(@class, "county-name")]')
-            for s in spans:
-                names.append((s.text or "").strip())
-        except Exception as e:
-            self._write_log(f"_all_county_names error: {e}")
-        return names
-
-    def _counties(self):
-        els = self._wait_for("//div[contains(@class, 'button-wrapper')]", multiple=True, timeout=10)
-        return list(els) if els else []
-
-    def _connect_county(self, idx):
-        try:
-            counties = self._counties()
-            county = counties[idx]
-            self.actions.move_to_element(county).perform()
-            for _ in range(3):
-                try:
-                    county.click()
-                    disconnect = self._wait_for("//button[@type='button']", timeout=10)
-                    if disconnect and disconnect.text.strip() == "Disconnect":
-                        return True
-                except StaleElementReferenceException:
-                    counties = self._counties()
-                    county = counties[idx]
-            return False
-        except Exception as e:
-            self._write_log(f"Connect county error: {e}")
-            return False
-
-    def _close_popup(self):
-        try:
-            x = self._wait_for("//i[contains(@class, 'fa-xmark')]", timeout=3)
-            if x:
-                x.click()
-        except Exception:
-            pass
-
-    def _disconnect(self):
-        try:
-            b = self._wait_for("//button[@type='button']", timeout=5)
-            if b and b.text.strip() == "Disconnect":
-                b.click()
-            time.sleep(0.5)
-        except Exception:
-            pass
-
-    def _logout(self):
-        try:
-            buttons = self._wait_for("//button[contains(@class,'nav-button')]", multiple=True, timeout=8)
-            if buttons:
-                logout_btn = list(buttons)[-1]
-                if "Sign out" in logout_btn.text:
-                    logout_btn.click()
-                    yes = self._wait_for("//button[contains(@class,'mobile-dialog-button')]", timeout=6)
-                    if yes:
-                        yes.click()
-        except Exception:
-            pass
-
-    def _fill_form(self, county_name, second_pass=False):
-        try:
-            # Start / End
-            start = self._wait_for("//input[@placeholder='Enter a start date']", timeout=10)
-            if start:
-                try:
-                    start.clear()
-                except Exception:
-                    pass
-                start.send_keys(self._start_date_str())
-
-            end = self._wait_for("//input[@placeholder='Enter an end date']", timeout=10)
-            if end:
-                try:
-                    end.clear()
-                except Exception:
-                    pass
-                end.send_keys(self._end_date_str())
-
-            # Doc type selector
-            dd = self._wait_for("//p-dropdown[@formcontrolname='selectedDocumentType']", timeout=10)
-            dd.click()
-            search = self._wait_for("//input[contains(@class, 'p-dropdown-filter')]", timeout=10)
+    def __parse_doc_date_text(self, s):
+        """
+        e.g. 'Sep 10, 2025' -> '09/10/2025'
+        """
+        s = (s or "").strip()
+        if not s:
+            return ""
+        for fmt in ["%b %d, %Y", "%B %d, %Y"]:
             try:
-                search.clear()
+                dt = datetime.strptime(s, fmt)
+                return dt.strftime("%m/%d/%Y")
             except Exception:
                 pass
+        # if unknown format, just return original
+        return s
 
-            if second_pass:
-                search.send_keys("RESOLUTION")
-            else:
-                if county_name.strip() == "Jefferson County":
-                    search.send_keys("APPOINTMENT")
-                else:
-                    search.send_keys("Successor")
-
-            option = self._wait_for("//li[@role='option']", timeout=10)
-            option.click()
-            run_btn = self._wait_for("//button[contains(@class,'run-btn')]", timeout=10)
-            run_btn.click()
-
-            # Wait for either table rows OR API payload, up to WAIT_DURATION seconds
-            self._wait_for("//table[contains(@class,'p-datatable-table')]", timeout=self.WAIT_DURATION)
-        except Exception as e:
-            self._write_log(f"Fill form error: {e}")
-
-    # ---------- Date parsing ----------
-    @staticmethod
-    def _try_parse_date(s: str, fmts):
-        for fmt in fmts:
+    def __parse_recorded_date_text(self, s):
+        """
+        e.g. 'Sep 12, 2025, 8:27 AM' -> '09/12/2025, 08:27 AM'
+        """
+        s = (s or "").strip()
+        if not s:
+            return ""
+        tried = [
+            "%b %d, %Y, %I:%M %p",
+            "%B %d, %Y, %I:%M %p",
+            "%b %d, %Y %I:%M %p",
+            "%B %d, %Y %I:%M %p",
+        ]
+        for fmt in tried:
             try:
-                return datetime.strptime(s.strip(), fmt)
+                dt = datetime.strptime(s, fmt)
+                return dt.strftime("%m/%d/%Y, %I:%M %p")
             except Exception:
-                continue
-        return None
+                pass
+        # if unknown format, return original
+        return s
 
-    def _extract_doc_date(self, doc) -> str:
-        candidates = [
-            doc.get("docDate"),
-            doc.get("docDateDisplay"),
-            doc.get("documentDate"),
-            doc.get("documentDateDisplay"),
-            doc.get("docDateStr"),
-        ]
-        for val in candidates:
-            if not val:
-                continue
-            if isinstance(val, str) and "T" in val:
-                dt = self._try_parse_date(val, ["%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%S.%f"])
-                if dt:
-                    return dt.strftime("%m/%d/%Y")
-            if isinstance(val, str):
-                dt = self._try_parse_date(val, ["%b %d, %Y", "%m/%d/%Y", "%b %d, %Y, %I:%M %p", "%Y-%m-%d"])
-                if dt:
-                    return dt.strftime("%m/%d/%Y")
-        return ""
+    def __scrape_table_dates_map(self):
+        """
+        After the search results render, scrape the table DOM.
+        Each result row has multiple <td class="column-data"> elements starting at 'Doc Number'.
 
-    def _extract_recorded_date(self, doc) -> str:
-        candidates = [
-            doc.get("docRecordedDateTime"),
-            doc.get("docRecordedDateTimeDisplay"),
-            doc.get("recordedDate"),
-            doc.get("recordedDateDisplay"),
-            doc.get("recordedDateStr"),
-        ]
-        for val in candidates:
-            if not val:
-                continue
-            if isinstance(val, str) and "T" in val:
-                dt = self._try_parse_date(val, ["%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%S.%f"])
-                if dt:
-                    return dt.strftime("%m/%d/%Y, %I:%M %p")
-            if isinstance(val, str):
-                dt = self._try_parse_date(val, ["%b %d, %Y, %I:%M %p", "%m/%d/%Y, %I:%M %p"])
-                if dt:
-                    return dt.strftime("%m/%d/%Y, %I:%M %p")
-                dt = self._try_parse_date(val, ["%b %d, %Y", "%m/%d/%Y", "%Y-%m-%d"])
-                if dt:
-                    return dt.strftime("%m/%d/%Y")
-        return ""
-
-    # ---------- Read dates from the visible table ----------
-    def _collect_table_dates(self):
-        result = {}
+        Index mapping within column-data tds:
+          0 -> Doc Number
+          1 -> Party
+          2 -> Book & Page
+          3 -> Doc Date
+          4 -> Recorded Date
+          5 -> Doc Type
+          6 -> Assoc Doc
+          7 -> Legal Summary
+          8 -> Consideration
+          9 -> Additional Party
+          10 -> Pages
+        """
+        mapping = {}
         try:
-            header_ths = self.driver.find_elements(By.XPATH, "//table[contains(@class,'p-datatable-table')]//thead//th")
-            col_map = {}
-            for idx, th in enumerate(header_ths):
-                label = (th.text or "").strip().lower()
-                if "doc number" in label:
-                    col_map["doc_number"] = idx
-                elif label == "doc date":
-                    col_map["doc_date"] = idx
-                elif "recorded date" in label:
-                    col_map["recorded_date"] = idx
+            # Make sure table exists
+            _tbody = self.__wait_for_element("//tbody[contains(@class,'p-datatable-tbody')]", False)
+            if not _tbody:
+                return mapping
 
-            if not all(k in col_map for k in ["doc_number", "doc_date", "recorded_date"]):
-                return result
+            rows = self.driver.find_elements(By.CSS_SELECTOR, "tbody.p-datatable-tbody tr")
+            for row in rows:
+                cols = row.find_elements(By.CSS_SELECTOR, "td.column-data")
+                if len(cols) < 5:
+                    continue
+                doc_no = cols[0].text.strip()
+                doc_date = cols[3].text.strip() if len(cols) > 3 else ""
+                rec_date = cols[4].text.strip() if len(cols) > 4 else ""
 
-            rows = self.driver.find_elements(By.XPATH, "//table[contains(@class,'p-datatable-table')]//tbody/tr")
-            for r in rows:
-                tds = r.find_elements(By.XPATH, "./td")
-                try:
-                    dn = (tds[col_map["doc_number"]].text or "").strip()
-                    dd_raw = (tds[col_map["doc_date"]].text or "").strip()
-                    rd_raw = (tds[col_map["recorded_date"]].text or "").strip()
-
-                    dd_norm = ""
-                    rd_norm = ""
-
-                    if dd_raw:
-                        dt = self._try_parse_date(dd_raw, ["%b %d, %Y", "%m/%d/%Y", "%Y-%m-%d"])
-                        if dt:
-                            dd_norm = dt.strftime("%m/%d/%Y")
-
-                    if rd_raw:
-                        dt = self._try_parse_date(rd_raw, ["%b %d, %Y, %I:%M %p", "%m/%d/%Y, %I:%M %p"])
-                        if dt:
-                            rd_norm = dt.strftime("%m/%d/%Y, %I:%M %p")
-                        else:
-                            dt = self._try_parse_date(rd_raw, ["%b %d, %Y", "%m/%d/%Y", "%Y-%m-%d"])
-                            if dt:
-                                rd_norm = dt.strftime("%m/%d/%Y")
-
-                    if dn:
-                        result[dn] = {"doc_date": dd_norm, "recorded_date": rd_norm}
-                except Exception as er:
-                    self._write_log(f"_collect_table_dates row error: {er}")
+                parsed_doc = self.__parse_doc_date_text(doc_date)
+                parsed_rec = self.__parse_recorded_date_text(rec_date)
+                if doc_no:
+                    mapping[doc_no] = {
+                        "Doc Date": parsed_doc,
+                        "Recorded Date": parsed_rec,
+                    }
         except Exception as e:
-            self._write_log(f"_collect_table_dates error: {e}")
+            self.__write_log(f"__scrape_table_dates_map error: {e}")
+        return mapping
 
-        try:
-            with open(os.path.join(self.OUT_DIR, "_debug_table_dates.json"), "w", encoding="utf-8") as f:
-                json.dump(result, f, ensure_ascii=False, indent=2)
-        except Exception:
-            pass
+    # ----------------- detail enrichment -----------------
 
-        return result
-
-    # ---------- Data shaping ----------
-    def _clean_results(self, county_slug, docs_list, table_dates_map):
-        out = []
-        doc_id = 1
-        for doc in docs_list or []:
-            try:
-                doc_number = str(doc.get("userDocNo", "") or "").strip()
-
-                api_doc_date = self._extract_doc_date(doc)
-                api_rec_date = self._extract_recorded_date(doc)
-
-                # fallback from table
-                if (not api_doc_date or not api_doc_date.strip()) and doc_number in table_dates_map:
-                    api_doc_date = table_dates_map[doc_number].get("doc_date", "") or api_doc_date
-                if (not api_rec_date or not api_rec_date.strip()) and doc_number in table_dates_map:
-                    api_rec_date = table_dates_map[doc_number].get("recorded_date", "") or api_rec_date
-
-                nd = {
-                    "id": f"{county_slug}-{doc_id}",
-                    "Doc Number": doc_number,
-                    "Party": f"{doc.get('partyOne','')}" + (f" ({doc.get('partyOneType')})" if doc.get("partyOneType") else ""),
-                    "Book & Page": doc.get("bookPage", ""),
-                    "Doc Date": api_doc_date or "",
-                    "Recorded Date": api_rec_date or "",
-                    "Doc Type": doc.get("docType", ""),
-                    "Assoc Doc": doc.get("assocDocSummary", ""),
-                    "Legal Summary": doc.get("legalSummary", ""),
-                    "Consideration": f"${doc['consideration']}" if doc.get("consideration") is not None else "",
-                    "Pages": doc.get("pages", ""),
-                }
-                out.append(nd)
-            except Exception as e:
-                self._write_log(f"Clean doc error: {e}")
-            doc_id += 1
-        return out
-
-    def _group_by_doc_number(self, clean):
-        grouped = {}
-        for r in clean:
-            grouped.setdefault(r.get("Doc Number", ""), []).append(r)
-        return grouped
-
-    def _doc_detail(self, auth_token, doc_id):
-        details = {"addresses": [], "parcels": []}
-        if not doc_id:
-            return details
+    def get_doc_details(self, auth_token, search_doc_id):
+        """
+        Pulls legal descriptions to populate 'addresses' and 'parcels'.
+        """
+        doc_details = {"addresses": [], "parcels": []}
         try:
             headers = {
-                "Authorization": auth_token,
-                "Content-Type": "application/json",
                 "Accept": "application/json, text/plain, */*",
+                "Content-Type": "application/json",
+                "Authorization": f"{auth_token}" if auth_token else "",
+                "User-Agent": "Mozilla/5.0",
+            }
+            data = {
+                "searchDocId": search_doc_id,
+                "searchResultId": None,
+                "searchResultAuthCode": None,
             }
             resp = requests.post(
                 "https://www.laredoanywhere.com/LaredoAnywhere/LaredoAnywhere.WebService/api/docDetail",
                 headers=headers,
-                json={"searchDocId": doc_id, "searchResultId": None, "searchResultAuthCode": None},
-                timeout=25,
+                json=data,
+                timeout=30,
             )
-            jr = resp.json()
-            if jr.get("document", {}).get("legalList"):
-                for l in jr["document"]["legalList"]:
-                    if l.get("legalType") == "A":
-                        details["addresses"].append(l.get("description", ""))
-                    elif l.get("legalType") == "P":
-                        details["parcels"].append(l.get("description", ""))
+            if resp.ok:
+                jr = resp.json()
+                legal_list = (
+                    jr.get("document", {}).get("legalList", []) if isinstance(jr, dict) else []
+                )
+                address_list, parcel_list = [], []
+                for legal in legal_list:
+                    if legal.get("legalType") == "A":
+                        address_list.append(legal.get("description", ""))
+                    elif legal.get("legalType") == "P":
+                        parcel_list.append(legal.get("description", ""))
+                doc_details["addresses"] = address_list
+                doc_details["parcels"] = parcel_list
         except Exception as e:
-            self._write_log(f"Doc detail error: {e}")
-        return details
+            self.__write_log(f"Error in get_doc_details(): {e}")
+        return doc_details
 
-    def _id_map(self, docs):
-        m = {}
-        for d in docs or []:
-            u = d.get("userDocNo")
-            if u and u not in m:
-                m[u] = d.get("searchDocId")
-        return m
+    # ----------------- transformation -----------------
 
-    def _combine_records(self, auth_token, id_map, grouped):
-        out = []
-        max_addr = max_parc = 0
-        records_list = []
-
-        for doc_no, linked in grouped.items():
-            base = linked[0]
-            base.update(self._doc_detail(auth_token, id_map.get(doc_no)))
-            linked[0] = base
-            max_addr = max(max_addr, len(base.get("addresses", [])))
-            max_parc = max(max_parc, len(base.get("parcels", [])))
-            records_list.append(linked)
-
-        def add_series(max_n, key, linked, rec):
-            if key == "Party":
-                vals = [r.get("Party", "") for r in linked] + [""] * (self.max_parties - len(linked))
-                for i, v in enumerate(vals[: self.max_parties], 1):
-                    rec[f"Party{i}"] = v
-            else:
-                seq0 = linked[0].get(key, []) or []
-                seq = seq0 + [""] * (max_n - len(seq0))
-                label = "Address" if key == "addresses" else "Parcel"
-                for i, v in enumerate(seq[:max_n], 1):
-                    rec[f"{label}{i}"] = v
-
-        for linked in records_list:
-            nr = {}
-            base = linked[0]
-            for k, v in base.items():
-                if k == "Party":
-                    add_series(self.max_parties, k, linked, nr)
-                elif k == "addresses":
-                    add_series(max(max_addr, 0), k, linked, nr)
-                elif k == "parcels":
-                    add_series(max(max_parc, 0), k, linked, nr)
-                else:
-                    nr[k] = v
-            out.append(nr)
-        return out
-
-    def _write_json(self, data, name):
-        path = os.path.join(self.OUT_DIR, f"{name}.json")
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        print(f"Saved {path} ({len(data)} records)")
-
-    # ---------- Main ----------
-    def run(self, rescrape_indices):
+    def get_grouped_data(self, clean_data):
+        grouped = {}
         try:
-            if not self._login():
-                print("Login failed.")
-                return
+            for record in clean_data:
+                doc_number = record.get("Doc Number", "")
+                if doc_number in grouped:
+                    grouped[doc_number].append(record)
+                else:
+                    grouped[doc_number] = [record]
+        except Exception as e:
+            self.__write_log(f"Error in get_grouped_data(): {e}")
+        return grouped
 
-            # Build mapping name->index and allow filtering
-            names = self._all_county_names()
-            buttons = self._counties()
-            if not names or not buttons:
-                self._write_log("No counties found")
-                self._save_screenshot("debug_no_counties")
-                self._save_html("debug_no_counties")
-                return
+    def get_map(self, data_list):
+        mapping = {}
+        try:
+            for data in data_list:
+                if data.get("userDocNo") not in mapping:
+                    mapping[data.get("userDocNo")] = data.get("searchDocId")
+        except Exception as e:
+            self.__write_log(f"Error in get_map(): {e}")
+        return mapping
 
-            name_to_index = {names[i]: i for i in range(min(len(names), len(buttons)))}
+    def get_combined_records(self, auth_token, doc_id_map, grouped_data):
+        new_records_list = []
+        try:
+            records_list = []
+            max_parties = max_addresses = max_parcels = 0
+            for doc_number, records in grouped_data.items():
+                old_record = records[0]
+                # enrich with details
+                if doc_number in doc_id_map:
+                    old_record.update(self.get_doc_details(auth_token, doc_id_map[doc_number]))
+                records[0] = old_record
 
-            # If user specified only_counties, trim to those
-            target_indices = []
-            if self.only_counties:
-                for want in self.only_counties:
-                    if want in name_to_index:
-                        target_indices.append(name_to_index[want])
+                max_parties = max(max_parties, len(records))
+                max_addresses = max(max_addresses, len(old_record.get("addresses", [])))
+                max_parcels = max(max_parcels, len(old_record.get("parcels", [])))
+                records_list.append(records)
+
+            max_parties = max(self.max_parties, max_parties)
+
+            def combine_dummies(max_entities, key_value, linked_records, out_record):
+                if key_value == "Party":
+                    all_vals = [r["Party"] for r in linked_records]
+                    all_vals += [""] * (max_entities - len(all_vals))
+                    for idx, val in enumerate(all_vals, 1):
+                        out_record[f"Party{idx}"] = val
+                else:
+                    all_vals = linked_records[0].get(key_value, [])
+                    all_vals += [""] * (max_entities - len(all_vals))
+                    label = "Address" if key_value == "addresses" else "Parcel"
+                    for idx, val in enumerate(all_vals, 1):
+                        out_record[f"{label}{idx}"] = val
+
+            for linked in records_list:
+                out_rec = {}
+                old = linked[0]
+                for key in old:
+                    if key == "Party":
+                        combine_dummies(max_parties, key, linked, out_rec)
+                    elif key == "addresses":
+                        combine_dummies(len(old.get("addresses", [])), "addresses", linked, out_rec)
+                    elif key == "parcels":
+                        combine_dummies(len(old.get("parcels", [])), "parcels", linked, out_rec)
                     else:
-                        self._write_log(f"Requested county '{want}' not found in page list: {names}")
-            else:
-                # default: all
-                target_indices = list(range(len(name_to_index)))
+                        out_rec[key] = old[key]
+                new_records_list.append(out_rec)
+        except Exception as e:
+            self.__write_log(f"Error in get_combined_records(): {e}")
+        return new_records_list
 
-            print("Target county indices:", target_indices)
+    # ----------------- cleaning & writing -----------------
 
+    def __clean_data(self, county_slug, docs_list, table_date_map):
+        """
+        Build the flat records for grouping. Fill Doc Date / Recorded Date
+        from API if present, otherwise from the table_date_map.
+        """
+        doc_id = 1
+        new_docs_list = []
+        for doc in docs_list:
+            try:
+                doc_no = str(doc.get("userDocNo", "")).strip()
+                party_one = (doc.get("partyOne") or "").strip()
+                party_one_type = (doc.get("partyOneType") or "").strip()
+                party = f"{party_one}{f' ({party_one_type})' if party_one_type else ''}"
+
+                new_doc = {
+                    "id": f"{county_slug}-{doc_id}",
+                    "Doc Number": doc_no,
+                    "Party": party,
+                    "Book & Page": doc.get("bookPage"),
+                    "Doc Date": "",
+                    "Recorded Date": "",
+                    "Doc Type": doc.get("docType") or "",
+                    "Assoc Doc": (doc.get("assocDocSummary") or ""),
+                    "Legal Summary": (doc.get("legalSummary") or ""),
+                    "Consideration": f"${doc.get('consideration', 0) or 0.0}".replace("$$", "$"),
+                    "Pages": doc.get("pages", ""),
+                }
+
+                # Try API datetimes first (ISO or similar)
+                api_doc_date = doc.get("docDate") or doc.get("documentDate")
+                api_rec_date = doc.get("docRecordedDateTime") or doc.get("recordedDateTime")
+
+                if api_doc_date:
+                    # try common formats
+                    parsed = None
+                    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
+                        try:
+                            parsed = datetime.strptime(api_doc_date, fmt)
+                            break
+                        except Exception:
+                            pass
+                    if parsed:
+                        new_doc["Doc Date"] = parsed.strftime("%m/%d/%Y")
+
+                if api_rec_date:
+                    parsed = None
+                    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%S.%f"):
+                        try:
+                            parsed = datetime.strptime(api_rec_date, fmt)
+                            break
+                        except Exception:
+                            pass
+                    if parsed:
+                        new_doc["Recorded Date"] = parsed.strftime("%m/%d/%Y, %I:%M %p")
+
+                # If any date is still empty, override from table map
+                if doc_no in table_date_map:
+                    if not new_doc["Doc Date"]:
+                        new_doc["Doc Date"] = table_date_map[doc_no].get("Doc Date", "")
+                    if not new_doc["Recorded Date"]:
+                        new_doc["Recorded Date"] = table_date_map[doc_no].get("Recorded Date", "")
+
+                new_docs_list.append(new_doc)
+            except Exception as e:
+                self.__write_log(f"Error in __clean_data(): {e}")
+            doc_id += 1
+        return new_docs_list
+
+    def __write_json(self, data, filename):
+        try:
+            path = os.path.join(self.OUTPUT_DIRECTORY, f"{filename}.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            print(f"JSON file '{path}' written.")
+        except Exception as e:
+            print("Error in __write_json():", e)
+            self.__write_log(e)
+
+    # ----------------- main flow -----------------
+
+    def extract_data(self):
+        try:
+            if self.hard_timeout and (time.time() - self.flow_start_time) > self.hard_timeout:
+                raise TimeoutError("Hard timeout reached before start")
+
+            if not self.__login():
+                return
+
+            available_counties = self.__get_counties()
+            total_counties = len(available_counties)
+            print("Total Counties:", total_counties)
+
+            # Build a list of (index, name) so we can filter by name if requested
+            county_names = []
+            for idx in range(total_counties):
+                try:
+                    name = self.driver.find_elements(
+                        By.XPATH, '//span[contains(@class, "county-name")]'
+                    )[idx].text.strip()
+                except Exception:
+                    name = f"county-{idx}"
+                county_names.append((idx, name))
+
+            current = 0
             scrape_count = {}
-            i_ptr = 0
-            while i_ptr < len(target_indices):
-                if self._now_exceeded():
-                    self._write_log("Hard timeout reached; stopping.")
-                    break
 
-                idx = target_indices[i_ptr]
-                county_name = names[idx]
-                slug = slugify(county_name)
-                print(f"Scraping {county_name}")
+            while current < total_counties:
+                idx, county_name = county_names[current]
 
-                second = scrape_count.get(idx, 0) == 1 and idx in rescrape_indices
-
-                if self._connect_county(idx):
-                    self._close_popup()
-                    self._fill_form(county_name, second_pass=second)
-
-                    # Collect visible table dates quickly
-                    table_dates = self._collect_table_dates()
-
-                    # Intercept API payload (bounded polling)
-                    intercepted = self._intercept_after_search(poll_sec=10)
-                    docs = intercepted.get("docs_list", []) or []
-                    token = intercepted.get("auth_token", "")
-
-                    print(f"Intercepted docs: {len(docs)}")
-
-                    cleaned = self._clean_results(slug, docs, table_dates)
-                    grouped = self._group_by_doc_number(cleaned)
-                    ids = self._id_map(docs)
-                    combined = self._combine_records(token, ids, grouped) if cleaned else []
-
-                    name = f"{slug}_resolution" if second else slug
-                    self._write_json(combined, name)
-                    if combined:
-                        self.combined_records_all.extend(combined)
-                        self.flow_log.setdefault(county_name, {})["data_json"] = "saved"
-                    else:
-                        self.flow_log.setdefault(county_name, {})["data_json"] = "empty"
-
-                    self._disconnect()
-
-                scrape_count[idx] = scrape_count.get(idx, 0) + 1
-                if idx in rescrape_indices and scrape_count[idx] == 1:
-                    print(f"Re-scraping {county_name} for second pass")
+                # If only specific counties requested, skip others
+                if self.only_counties and county_name not in self.only_counties:
+                    current += 1
                     continue
 
-                i_ptr += 1
+                if self.hard_timeout and (time.time() - self.flow_start_time) > self.hard_timeout:
+                    raise TimeoutError("Hard timeout reached during scraping")
 
-            # Combined file
-            self._write_json(self.combined_records_all, "all_counties")
+                try:
+                    county_slug = slugify(county_name)
+                    print(f"Scraping {county_name}")
 
-            self._logout()
-            try:
-                self.driver.quit()
-            except Exception:
-                pass
+                    count = scrape_count.get(idx, 0)
+                    second_pass = count == 1 and idx in self.rescrape_indices
 
-            self.flow_log["time_taken_sec"] = round(time.time() - self.flow_start_time, 2)
-            self._write_flow_logs()
+                    if self.__connect_county(county_name, idx):
+                        self.__close_popup()
+                        self.__fill_form(county_name, second_pass=second_pass)
+
+                        # 1) scrape table dates (source of truth for dates)
+                        table_date_map = self.__scrape_table_dates_map()
+
+                        # 2) intercept API results + auth (for other fields and details)
+                        intercept_data = self.__intercept()
+                        docs_list = intercept_data.get("docs_list", [])
+                        auth_token = intercept_data.get("auth_token", "")
+
+                        # 3) clean + fill dates from table if API missing
+                        cleaned_docs_list = self.__clean_data(
+                            county_slug, docs_list, table_date_map
+                        )
+
+                        if cleaned_docs_list:
+                            grouped_data = self.get_grouped_data(cleaned_docs_list)
+                            doc_id_map = self.get_map(docs_list)
+                            combined_records = self.get_combined_records(
+                                auth_token, doc_id_map, grouped_data
+                            )
+                            if combined_records:
+                                filename = f"{county_slug}_resolution" if second_pass else county_slug
+                                self.__write_json(combined_records, filename)
+                                self.flow_log.setdefault(county_name, {})["data"] = "saved"
+                            else:
+                                print(
+                                    f"JSON not saved. Empty combined records for '{county_name}'"
+                                )
+                                self.flow_log.setdefault(county_name, {})["data"] = "not saved"
+
+                        self.__disconnect_county(county_name)
+
+                    scrape_count[idx] = count + 1
+                    if idx in self.rescrape_indices and scrape_count[idx] == 1:
+                        print(f"Re-scraping {county_name} for second pass")
+                        continue  # Do the second pass
+
+                    current += 1
+
+                except Exception as e:
+                    print(f"Error iterating counties: {e}")
+                    self.__write_log(e)
+                    current += 1
+
+            self.__logout()
+            self.driver.quit()
+            self.flow_log["time_taken_seconds"] = round(time.time() - self.flow_start_time, 1)
+            self.__write_flow_logs()
 
         except Exception as e:
-            self._write_log(f"Run error: {e}")
+            print("Error in extract_data():", e)
+            self.__write_log(e)
             try:
                 self.driver.quit()
             except Exception:
                 pass
+
+
+# ----------------- CLI -----------------
+
+def parse_args():
+    p = argparse.ArgumentParser()
+    p.add_argument("--headless", action="store_true", help="Run Chrome headless")
+    p.add_argument("--out", default="files", help="Output directory")
+    p.add_argument("--wait", type=int, default=20, help="UI wait seconds")
+    p.add_argument("--max-parties", type=int, default=6, help="Party1..PartyN")
+    p.add_argument("--days-back", type=int, default=2, help="Start = today - N days")
+    p.add_argument("--rescrape-indices", default="", help="Space-separated indices (e.g. '1 2')")
+    p.add_argument("--only-counties", default="", help='Comma-separated county names (exact matches)')
+    p.add_argument("--hard-timeout", type=int, default=0, help="Hard stop seconds for whole flow")
+    return p.parse_args()
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Laredo scraper -> JSON")
-    parser.add_argument("--out", default="files", help="Output directory")
-    parser.add_argument("--headless", action="store_true", help="Run headless")
-    parser.add_argument("--wait", type=int, default=25, help="Wait seconds for UI")
-    parser.add_argument("--max-parties", type=int, default=6)
-    parser.add_argument("--days-back", type=int, default=2, help="Start = today-N, End = today")
-    parser.add_argument("--hard-timeout", type=int, default=900, help="Hard timeout (seconds) for entire run")
-    parser.add_argument("--only-counties", type=str, default="", help="Comma-separated county names to scrape")
-    parser.add_argument("--rescrape-indices", nargs="*", type=int, default=[1, 2], help="County indices to scrape twice")
-    args = parser.parse_args()
-
-    only = [s for s in args.only_counties.split(",")] if args.only_counties else []
-
-    scraper = LaredoScraper(
-        out_dir=args.out,
+    args = parse_args()
+    scraper = Laredo(
         headless=args.headless,
+        out_dir=args.out,
         wait_seconds=args.wait,
         max_parties=args.max_parties,
         days_back=args.days_back,
-        hard_timeout_sec=args.hard_timeout,
-        only_counties=only,
+        rescrape_indices=args.rescrape_indices,
+        only_counties=args.only_counties if args.only_counties else None,
+        hard_timeout=args.hard_timeout if args.hard_timeout > 0 else None,
     )
-    scraper.run(rescrape_indices=set(args.rescrape_indices))
+    scraper.extract_data()
