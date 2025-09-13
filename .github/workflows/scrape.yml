@@ -1,1 +1,101 @@
+name: Laredo Scraper
 
+on:
+  workflow_dispatch:
+    inputs:
+      headless:
+        description: "Run headless"
+        type: boolean
+        default: true
+      out_dir:
+        description: "Output directory"
+        type: string
+        default: "files"
+      wait_seconds:
+        description: "UI wait seconds"
+        type: number
+        default: 12
+      max_parties:
+        description: "How many Party columns (Party1..N)"
+        type: number
+        default: 6
+      rescrape_indices:
+        description: "Space-separated county indices for second pass (e.g. '1 2')"
+        type: string
+        default: "1 2"
+      push_results:
+        description: "Commit JSON/results back to repo"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write  # needed if push_results=true
+
+jobs:
+  run-scraper:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      LAREDO_USERNAME: ${{ secrets.LAREDO_USERNAME }}
+      LAREDO_PASSWORD: ${{ secrets.LAREDO_PASSWORD }}
+      OUT_DIR: ${{ inputs.out_dir || 'files' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Setup Chrome
+        uses: browser-actions/setup-chrome@v1
+        with:
+          chrome-version: stable
+
+      - name: Show Chrome version
+        run: google-chrome --version || chrome --version || true
+
+      - name: Run scraper
+        run: |
+          echo "Rescrape indices: ${{ inputs.rescrape_indices }}"
+          python laredo_scraper.py \
+            ${{ inputs.headless && '--headless' || '' }} \
+            --out "${{ env.OUT_DIR }}" \
+            --wait ${{ inputs.wait_seconds }} \
+            --max-parties ${{ inputs.max_parties }} \
+            --rescrape-indices ${{ inputs.rescrape_indices }}
+
+      - name: Upload JSON and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: laredo-results
+          path: |
+            ${{ env.OUT_DIR }}/
+            laredo-flow-logs.json
+            laredo.logs
+
+      - name: Commit results to repo
+        if: ${{ inputs.push_results }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add ${{ env.OUT_DIR }}/*.json ${{ env.OUT_DIR }}/*.csv 2>/dev/null || true
+          git add laredo-flow-logs.json laredo.logs 2>/dev/null || true
+          git commit -m "chore: update laredo JSON $(date -u +'%Y-%m-%dT%H:%M:%SZ')" || echo "Nothing to commit"
+          git push
